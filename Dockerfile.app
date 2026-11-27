@@ -13,7 +13,7 @@
 #   重启只影响几秒），但**不要重启 napcat**（登录态），也别用 `swapoff -a`
 #   （可用内存比 swap 占用还小，会直接把服务拖死）。）
 #
-# 构建（构建上下文里必须已有 `app.tar.gz`，`deploy-qqchat.py` 会生成并上传）：
+# 构建（构建上下文里必须已有 `app.tar.gz`，由 `build/package-release.py` 生成并通过 `tools/deploy-remote.py` 部署）：
 #   docker build -f Dockerfile.app -t qqchat-agent:latest .
 # digest 钉死（#122）：浮动 tag 会让"同一份代码"在不同日期构建出不同镜像。
 # 需要升级基线镜像时：docker buildx imagetools inspect mcr.microsoft.com/dotnet/runtime:10.0 取 digest 再改这里。

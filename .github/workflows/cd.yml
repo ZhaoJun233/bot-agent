@@ -1,0 +1,484 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: CD action to execute
+        required: true
+        type: choice
+        default: deploy
+        options:
+          - deploy
+          - build-only
+          - rollback
+      scope:
+        description: Deployment scope
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - backend
+          - web
+      rollback_stamp:
+        description: Rollback UTC stamp (required when action=rollback, e.g. 20261126T065246Z)
+        required: false
+        type: string
+        default: ''
+      publish_ghcr:
+        description: Push GHCR container image on manual run
+        required: false
+        type: boolean
+        default: false
+      skip_ci_gate:
+        description: Skip waiting for CI workflow completion (rollback skips automatically)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-ci-gate:
+    name: Verify CI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Wait for CI workflow (10/10 jobs) on commit
+        if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.action == 'rollback' || inputs.skip_ci_gate == true)) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, time
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          sha = os.environ['GITHUB_SHA']
+          expected_jobs = {
+              'Build and synthetic probes',
+              'Official delivery recovery on Windows',
+              'Web build and browser tests',
+              'Browser end-to-end (chromium)',
+              'Browser end-to-end (firefox)',
+              'Browser end-to-end (webkit)',
+              'Browser end-to-end (chromium-rate-limit)',
+              'Synthetic integration test (Core & Chat (S1-S17))',
+              'Synthetic integration test (Media & Tools (S18-S31))',
+              'Synthetic integration test (Governance & Multi-Platform (S32-S55))',
+          }
+
+          deadline = time.monotonic() + 35 * 60
+          while time.monotonic() < deadline:
+              out = subprocess.check_output(
+                  ['gh', 'api', f'repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=20'],
+                  text=True,
+              )
+              runs = json.loads(out).get('workflow_runs', [])
+              if not runs:
+                  print(f'Waiting for CI run on {sha[:12]}...', flush=True)
+                  time.sleep(20)
+                  continue
+
+              for run in runs:
+                  if run.get('status') != 'completed':
+                      continue
+                  if run.get('conclusion') != 'success':
+                      continue
+                  jobs_json = subprocess.check_output(
+                      ['gh', 'api', f'repos/{repo}/actions/runs/{run["id"]}/jobs?per_page=100'],
+                      text=True,
+                  )
+                  jobs = json.loads(jobs_json).get('jobs', [])
+                  passed = {j['name'] for j in jobs if j.get('conclusion') == 'success'}
+                  if expected_jobs.issubset(passed):
+                      print(f'CI gate passed: run={run["id"]} jobs={len(passed)}', flush=True)
+                      raise SystemExit(0)
+
+              if all(r.get('status') == 'completed' and r.get('conclusion') != 'success' for r in runs):
+                  raise SystemExit(f'CI run failed on {sha[:12]}: latest={runs[0]["id"]} ({runs[0].get("conclusion")})')
+
+              print(f'CI still running on {sha[:12]} (runs={len(runs)})...', flush=True)
+              time.sleep(30)
+
+          raise SystemExit(f'Timed out waiting for green CI run on {sha[:12]}')
+          PY
+
+  build-artifacts:
+    name: Build release bundle and container smoke test
+    needs: verify-ci-gate
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.action != 'rollback' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      label: ${{ steps.meta.outputs.label }}
+      is_tag: ${{ steps.meta.outputs.is_tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Install Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
+      - name: Install Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Package deterministic release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/release-out"
+          rm -rf "$OUT"
+          python3 build/package-release.py \
+            --source . \
+            --output "$OUT" \
+            --commit "$GITHUB_SHA" \
+            --ref "$GITHUB_REF" \
+            --repo "$GITHUB_REPOSITORY"
+          mkdir -p "$OUT/tools"
+          cp tools/deploy-remote.py "$OUT/tools/deploy-remote.py"
+          cp tools/verify-web-deploy.sh "$OUT/tools/verify-web-deploy.sh"
+          chmod +x "$OUT/tools/deploy-remote.py" "$OUT/tools/verify-web-deploy.sh"
+      - name: Read bundle metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          receipt = json.loads(Path(os.environ['RUNNER_TEMP'], 'release-out/receipt.json').read_text(encoding='utf-8'))
+          print(f'version={receipt["version"]}')
+          print(f'label={receipt["label"]}')
+          print(f'is_tag={str(bool(receipt["isTag"])).lower()}')
+          PY
+      - name: Smoke test Dockerfile.app container (/healthz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/smoke"
+          rm -rf "$SMOKE"
+          mkdir -p "$SMOKE/data"
+          cp "$RUNNER_TEMP/release-out/assets/Dockerfile.app.txt" "$SMOKE/Dockerfile.app"
+          cp "$RUNNER_TEMP/release-out/assets"/botagent-*-linux-x64.tar.gz "$SMOKE/app.tar.gz"
+          docker build -f "$SMOKE/Dockerfile.app" -t botagent-cd-smoke:test "$SMOKE"
+          trap 'docker rm -f botagent-cd-smoke >/dev/null 2>&1 || true; rm -rf "$SMOKE"' EXIT
+          docker run -d --name botagent-cd-smoke \
+            -p 127.0.0.1:18080:8080 \
+            -e BOTAGENT_DATA_DIR=/tmp/data \
+            -e BOTAGENT_HEALTH_PORT=8080 \
+            -e BOTAGENT_HEALTH_BIND=0.0.0.0 \
+            -e QQCHAT_PANEL_PASSWORD=synthetic-cd-smoke-pass \
+            -e BOTAGENT_ZBA_TOKEN=synthetic-cd-admin-token \
+            -e BOTAGENT_ZBA_READ_TOKEN=synthetic-cd-read-token \
+            -e QQCHAT_API_KEY=sk-synthetic \
+            -e QQCHAT_BASE_URL=https://example.com/v1 \
+            -e QQCHAT_MODEL=synthetic-model \
+            botagent-cd-smoke:test
+          expected="${{ steps.meta.outputs.version }}"
+          for _ in $(seq 1 30); do
+            if body=$(curl -fsS --max-time 2 http://127.0.0.1:18080/healthz 2>/dev/null); then
+              echo "smoke /healthz: $body"
+              python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("version")==sys.argv[2], d' "$body" "$expected"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Container smoke test /healthz timed out"
+          exit 1
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cd-release-bundle
+          path: ${{ runner.temp }}/release-out
+          retention-days: 30
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-artifacts
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: cd-release-bundle
+          path: ${{ runner.temp }}/bundle
+      - name: Verify bundle checksums
+        working-directory: ${{ runner.temp }}/bundle/assets
+        run: sha256sum -c SHA256SUMS.txt
+      - name: Create or verify GitHub Release and re-check assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          BUNDLE="$RUNNER_TEMP/bundle"
+          FLAGS=()
+          if [[ "$TAG" == *-* ]]; then
+            FLAGS+=(--prerelease)
+          else
+            FLAGS+=(--latest)
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; verifying published assets"
+          else
+            gh release create "$TAG" "$BUNDLE"/assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "BotAgent $TAG" \
+              --notes-file "$BUNDLE/RELEASE-NOTES.md" \
+              "${FLAGS[@]}"
+          fi
+          VERIFY="$RUNNER_TEMP/release-verify"
+          rm -rf "$VERIFY"
+          mkdir -p "$VERIFY"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$VERIFY"
+          (cd "$VERIFY" && sha256sum -c SHA256SUMS.txt)
+
+  publish-ghcr:
+    name: Publish GHCR runtime image
+    needs: build-artifacts
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_ghcr == true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: cd-release-bundle
+          path: ${{ runner.temp }}/bundle
+      - name: Verify bundle checksums
+        working-directory: ${{ runner.temp }}/bundle/assets
+        run: sha256sum -c SHA256SUMS.txt
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and push GHCR image
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER_LC="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER_LC}/bot-agent"
+          VERSION="${{ needs.build-artifacts.outputs.version }}"
+          SHORT_SHA="${GITHUB_SHA::8}"
+          CTX="$RUNNER_TEMP/ghcr-ctx"
+          rm -rf "$CTX"
+          mkdir -p "$CTX"
+          cp "$RUNNER_TEMP/bundle/assets/Dockerfile.app.txt" "$CTX/Dockerfile.app"
+          cp "$RUNNER_TEMP/bundle/assets"/botagent-*-linux-x64.tar.gz "$CTX/app.tar.gz"
+
+          TAGS=(-t "${IMAGE}:sha-${SHORT_SHA}")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VER="${GITHUB_REF#refs/tags/v}"
+            TAGS+=(-t "${IMAGE}:${TAG_VER}")
+            if [[ "$TAG_VER" != *-* ]]; then
+              MINOR="${TAG_VER%.*}"
+              TAGS+=(-t "${IMAGE}:${MINOR}" -t "${IMAGE}:latest")
+            fi
+          fi
+
+          docker build -f "$CTX/Dockerfile.app" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            "${TAGS[@]}" \
+            "$CTX"
+
+          for arg in "${TAGS[@]}"; do
+            if [ "$arg" != "-t" ]; then
+              docker push "$arg"
+            fi
+          done
+
+  deploy-production:
+    name: Deploy to production
+    needs: [verify-ci-gate, build-artifacts, publish-release, publish-ghcr]
+    if: ${{ always() && (
+        (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') && needs.build-artifacts.result == 'success' && needs.publish-release.result == 'success' && needs.publish-ghcr.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'deploy' && needs.build-artifacts.result == 'success' && (inputs.publish_ghcr != true || needs.publish-ghcr.result == 'success')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'rollback' && needs.verify-ci-gate.result == 'success' && inputs.rollback_stamp != '')
+      ) }}
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out deploy helper (rollback mode)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'rollback' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools
+      - name: Download release bundle (deploy mode)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.action == 'rollback') }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: cd-release-bundle
+          path: ${{ runner.temp }}/bundle
+      - name: Validate production secrets
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SITE_HOST: ${{ secrets.DEPLOY_SITE_HOST }}
+          DEPLOY_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'all' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_SSH_HOST DEPLOY_SSH_USER DEPLOY_SSH_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required production Environment secret: $name"
+              exit 1
+            fi
+          done
+          if [ "$DEPLOY_SCOPE" != "backend" ] && [ -z "${DEPLOY_SITE_HOST:-}" ]; then
+            echo "::error::Missing required production Environment secret for web scope: DEPLOY_SITE_HOST"
+            exit 1
+          fi
+      - name: Prepare SSH session and execute remote deploy/rollback
+        id: ssh_deploy
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          DEPLOY_SSH_PROXY_JUMP: ${{ secrets.DEPLOY_SSH_PROXY_JUMP }}
+          DEPLOY_SSH_PROXY_KEY: ${{ secrets.DEPLOY_SSH_PROXY_KEY }}
+          DEPLOY_SITE_HOST: ${{ secrets.DEPLOY_SITE_HOST }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+          DEPLOY_WEB_DIR: ${{ secrets.DEPLOY_WEB_DIR }}
+          CD_ACTION: ${{ github.event_name == 'workflow_dispatch' && inputs.action || 'deploy' }}
+          CD_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'all' }}
+          CD_ROLLBACK_STAMP: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_stamp || '' }}
+          EXPECTED_VERSION: ${{ needs.build-artifacts.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          SSH_DIR="$RUNNER_TEMP/.ssh-cd"
+          mkdir -p "$SSH_DIR"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$SSH_DIR/id_deploy"
+          chmod 600 "$SSH_DIR/id_deploy"
+
+          PORT="${DEPLOY_SSH_PORT:-22}"
+          APP_DIR="${DEPLOY_APP_DIR:-/opt/qqchat}"
+          WEB_DIR="${DEPLOY_WEB_DIR:-/var/www/botagent-web}"
+          SSH_OPTS=(-i "$SSH_DIR/id_deploy" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=20 -o LogLevel=ERROR)
+          SCP_OPTS=(-i "$SSH_DIR/id_deploy" -P "$PORT" -o BatchMode=yes -o ConnectTimeout=20 -o LogLevel=ERROR)
+
+          if [ -n "${DEPLOY_SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$SSH_DIR/known_hosts"
+            chmod 600 "$SSH_DIR/known_hosts"
+            SSH_OPTS+=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_DIR/known_hosts")
+            SCP_OPTS+=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_DIR/known_hosts")
+          else
+            SSH_OPTS+=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$SSH_DIR/known_hosts")
+            SCP_OPTS+=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$SSH_DIR/known_hosts")
+          fi
+
+          if [ -n "${DEPLOY_SSH_PROXY_JUMP:-}" ]; then
+            if [ -n "${DEPLOY_SSH_PROXY_KEY:-}" ]; then
+              printf '%s\n' "$DEPLOY_SSH_PROXY_KEY" > "$SSH_DIR/id_proxy"
+              chmod 600 "$SSH_DIR/id_proxy"
+              PROXY_CMD="ssh -i $SSH_DIR/id_proxy -o BatchMode=yes -o StrictHostKeyChecking=accept-new -W %h:%p ${DEPLOY_SSH_PROXY_JUMP}"
+            else
+              PROXY_CMD="ssh -i $SSH_DIR/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=accept-new -W %h:%p ${DEPLOY_SSH_PROXY_JUMP}"
+            fi
+            SSH_OPTS+=(-o "ProxyCommand=$PROXY_CMD")
+            SCP_OPTS+=(-o "ProxyCommand=$PROXY_CMD")
+          fi
+
+          REMOTE_TARGET="${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}"
+          REMOTE_TMP="/tmp/botagent-cd-${GITHUB_RUN_ID}"
+          LOCAL_RECEIPT="$RUNNER_TEMP/deploy-receipt.json"
+
+          ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" "mkdir -p -m 700 '$REMOTE_TMP'"
+          trap 'ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" "rm -rf '\''$REMOTE_TMP'\''" >/dev/null 2>&1 || true' EXIT
+
+          if [ "$CD_ACTION" = "rollback" ]; then
+            scp "${SCP_OPTS[@]}" tools/deploy-remote.py "${REMOTE_TARGET}:${REMOTE_TMP}/deploy-remote.py"
+            ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" \
+              "sudo env DEPLOY_SITE_HOST='$DEPLOY_SITE_HOST' python3 '$REMOTE_TMP/deploy-remote.py' rollback --stamp '$CD_ROLLBACK_STAMP' --app-dir '$APP_DIR' --web-dir '$WEB_DIR' --scope '$CD_SCOPE' --public-log-safe --receipt-out '$REMOTE_TMP/receipt.json'"
+          else
+            (cd "$RUNNER_TEMP/bundle/assets" && sha256sum -c SHA256SUMS.txt)
+            scp "${SCP_OPTS[@]}" -r "$RUNNER_TEMP/bundle/assets" "$RUNNER_TEMP/bundle/tools/deploy-remote.py" "$RUNNER_TEMP/bundle/tools/verify-web-deploy.sh" "${REMOTE_TARGET}:${REMOTE_TMP}/"
+            ssh "${SSH_OPTS[@]}" "$REMOTE_TARGET" \
+              "sudo env DEPLOY_SITE_HOST='$DEPLOY_SITE_HOST' python3 '$REMOTE_TMP/deploy-remote.py' deploy --bundle-dir '$REMOTE_TMP/assets' --app-dir '$APP_DIR' --web-dir '$WEB_DIR' --scope '$CD_SCOPE' --expected-version '$EXPECTED_VERSION' --public-log-safe --receipt-out '$REMOTE_TMP/receipt.json'"
+          fi
+
+          scp "${SCP_OPTS[@]}" "${REMOTE_TARGET}:${REMOTE_TMP}/receipt.json" "$LOCAL_RECEIPT"
+          echo "has_receipt=true" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP'], 'deploy-receipt.json').read_text(encoding='utf-8'))
+          print('### Production Deployment Receipt (Public-Safe)')
+          print('')
+          print('| Field | Value |')
+          print('| :--- | :--- |')
+          for k in ('action', 'stamp', 'scope', 'verifiedAssets', 'napcatUntouched'):
+              if k in data:
+                  print(f'| `{k}` | `{data[k]}` |')
+          for section in ('web', 'backend'):
+              if section in data and isinstance(data[section], dict):
+                  for sub_k, sub_v in data[section].items():
+                      print(f'| `{section}.{sub_k}` | `{sub_v}` |')
+          PY
+      - name: Upload sanitized deploy receipt
+        if: ${{ steps.ssh_deploy.outputs.has_receipt == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deploy-receipt
+          path: ${{ runner.temp }}/deploy-receipt.json
+          retention-days: 90
+      - name: Clean up temporary SSH credentials
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/.ssh-cd"

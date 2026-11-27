@@ -118,6 +118,7 @@ jobs:
           # EngineProbe（插件闸门 + 后台评测队列）此前从未进 CI —— #123 的"探针必须在 CI 出现"断言靠这条兜住
           dotnet run --project tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj -c Release --no-restore
           python tests/BotAgent.ServerFilesProbe/test_server_files.py
+          python tests/BotAgent.ServerFilesProbe/test_cd_pipeline.py
       - name: Synthetic persistence and resilience probes
         run: |
           dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
