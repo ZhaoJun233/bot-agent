@@ -26,7 +26,7 @@ mkdir -p runtime
 docker run -d --name botagent --restart unless-stopped \
   --env-file botagent.env \
   -e BOTAGENT_DATA_DIR=/data \
-  -e BOTAGENT_HEALTH_PORT=8080 -e BOTAGENT_HEALTH_BIND=0.0.0.0 \
+  -e BOTAGENT_HEALTH_PORT=8080 -e BOTAGENT_HEALTH_BIND=+ \
   -p 127.0.0.1:8080:8080 -v "$PWD/runtime:/data" botagent:{{VERSION}}
 curl -fsS http://127.0.0.1:8080/healthz
 ```
