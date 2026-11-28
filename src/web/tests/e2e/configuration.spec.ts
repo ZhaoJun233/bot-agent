@@ -656,6 +656,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 })
 
 test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
+  // Avoid EventScheduler's 5s initial resync hitting the 401 mock mid-click on slow engines.
+  await page.route('**/zba/v1/events*', (route) => route.abort())
   await openConfiguration(page)
   await page.getByTestId('nav-plugins').click()
   await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
@@ -664,12 +666,15 @@ test('能力配置：读取 401 会退回认证页并清掉秘密输入', async 
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')
   await expect(page.getByTestId('ability-configuration-dialog').getByTestId('config-save-bar')).toContainText('1 项修改')
 
+  const reloadButton = page.getByTestId('ability-configuration-dialog').getByTestId('config-reload')
+  await reloadButton.scrollIntoViewIfNeeded()
+
   await page.route('**/zba/v1/configuration/read', (route) => route.fulfill({
     status: 401,
     contentType: 'application/json',
     json: { error: { code: 'unauthorized', message: 'synthetic expired' } }
   }))
-  await page.getByTestId('ability-configuration-dialog').getByTestId('config-reload').click()
+  await reloadButton.click()
 
   await expect(page.getByTestId('auth-gate')).toBeVisible()
   await expect(page.getByTestId('error-notice')).toContainText('unauthorized')
