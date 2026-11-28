@@ -48,6 +48,7 @@ internal static class Program
         if (!value) throw new InvalidOperationException(message);
     }
     private static Task AdvanceRegistered(Fixture f, int milliseconds) => TransitionClock.AdvanceRegistered(f, milliseconds);
+    private static Task AdvanceUntilIdle(Fixture f, int milliseconds) => TransitionClock.AdvanceUntilIdle(f, milliseconds);
     private static TaskCompletionSource Gate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static async Task OrdinaryDraft()
@@ -62,7 +63,7 @@ internal static class Program
         await f.Source.NextSend(); await f.Idle();
         Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "admitted generation sends exactly once");
         await f.Inbound("synthetic fresh ordinary input", target: 10003);
-        await f.Advance(12000); await f.Idle();
+        await AdvanceUntilIdle(f, 12000);
         Check(f.Model.History.Count == 1, "new opportunities use the updated zero probability");
     }
 
@@ -167,7 +168,7 @@ internal static class Program
         await f.Until(() => f.ActiveCount == 0, "committed emission drains");
         if (stop)
         {
-            await f.Advance(10000); await f.Idle();
+            await AdvanceUntilIdle(f, 10000);
             Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "stopped waiter produces no generation or send");
         }
         else

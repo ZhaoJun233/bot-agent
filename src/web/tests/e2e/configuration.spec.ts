@@ -546,6 +546,7 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
   const pageB = await contextB.newPage()
+  let primaryError: unknown = null
   try {
     await openConfiguration(pageA)
     await openConfiguration(pageB)
@@ -564,14 +565,24 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await expect(pageB.getByTestId('config-save-bar')).toContainText('1 项修改')
     await expect(inputB).toHaveValue(String(original + 2))
 
+    await expect(inputA).toHaveValue(String(original + 1), { timeout: 15_000 })
     await inputA.fill(String(original))
     await pageA.getByTestId('config-save').click()
     await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
     const restored = await readConfiguration(request)
     expect(restored.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
+  } catch (err) {
+    primaryError = err
+    throw err
   } finally {
-    await contextA.close()
-    await contextB.close()
+    let closeError: unknown = null
+    for (const ctx of [contextA, contextB]) {
+      try {
+        await ctx.close()
+      } catch (err) {
+        if (!primaryError && !closeError) closeError = err
+      }
+    }
     // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
     const latest = await readConfiguration(request)
     if (Number(latest.view.behavior.groupInterjectionCooldownSeconds?.value) !== original) {
@@ -579,6 +590,7 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
         behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original } }
       })
     }
+    if (!primaryError && closeError) throw closeError
   }
 })
 
@@ -655,6 +667,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 })
 
 test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
+  // Avoid EventScheduler's 5s initial resync hitting the 401 mock mid-click on slow engines.
+  await page.route('**/zba/v1/events*', (route) => route.abort())
   await openConfiguration(page)
   await page.getByTestId('nav-plugins').click()
   await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
@@ -663,12 +677,15 @@ test('能力配置：读取 401 会退回认证页并清掉秘密输入', async 
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')
   await expect(page.getByTestId('ability-configuration-dialog').getByTestId('config-save-bar')).toContainText('1 项修改')
 
+  const reloadButton = page.getByTestId('ability-configuration-dialog').getByTestId('config-reload')
+  await reloadButton.scrollIntoViewIfNeeded()
+
   await page.route('**/zba/v1/configuration/read', (route) => route.fulfill({
     status: 401,
     contentType: 'application/json',
     json: { error: { code: 'unauthorized', message: 'synthetic expired' } }
   }))
-  await page.getByTestId('ability-configuration-dialog').getByTestId('config-reload').click()
+  await reloadButton.click()
 
   await expect(page.getByTestId('auth-gate')).toBeVisible()
   await expect(page.getByTestId('error-notice')).toContainText('unauthorized')

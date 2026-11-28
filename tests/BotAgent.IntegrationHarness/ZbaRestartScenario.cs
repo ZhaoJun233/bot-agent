@@ -96,10 +96,25 @@ public static partial class Program
             Check("S55 重启前任务已受理并写回执",
                 submit.Status == 200 && restartTaskId is { Length: > 0 }, submit.Status + " " + submit.Body);
 
-            var events = await ZbaAsync(http, "GET", root + "/events?after=0&limit=200", readToken);
-            var page = JsonNode.Parse(events.Body) as JsonObject;
-            cursor = page?["nextSequence"]?.GetValue<long>() ?? -1;
-            Check("S55 重启前已产生两个事件并取得游标", cursor >= 2, events.Status + " cursor=" + cursor);
+            // Wait for the queued task's async failure/completion event so cursor captures the final pre-stop watermark.
+            JsonObject? page = null;
+            var settleWatch = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                var events = await ZbaAsync(http, "GET", root + "/events?after=0&limit=200", readToken);
+                page = JsonNode.Parse(events.Body) as JsonObject;
+                var items = page?["items"] as JsonArray;
+                var settled = items?.OfType<JsonObject>().Any(item =>
+                    item["type"]?.GetValue<string>() == "task.updated"
+                    && item["state"]?.GetValue<string>() is "succeeded" or "failed" or "cancelled" or "unknown") == true;
+                if (settled || settleWatch.Elapsed >= TimeSpan.FromSeconds(10))
+                {
+                    cursor = page?["nextSequence"]?.GetValue<long>() ?? -1;
+                    Check("S55 重启前已产生两个事件并取得游标", cursor >= 2, events.Status + " cursor=" + cursor);
+                    break;
+                }
+                await Task.Delay(50, cts.Token);
+            }
             await bot.StopAsync();
         }
 

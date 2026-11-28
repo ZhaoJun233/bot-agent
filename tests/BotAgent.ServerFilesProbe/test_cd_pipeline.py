@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+import urllib.error
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -128,6 +130,25 @@ if args[:2] == ['network', 'connect']:
     net = args[2]
     if net not in state['bot_networks']:
         state['bot_networks'].append(net)
+    save()
+    sys.exit(0)
+
+if args and args[0] == 'images':
+    repo_filter = args[1] if len(args) > 1 and not args[1].startswith('-') else ''
+    fmt = args[args.index('--format') + 1] if '--format' in args else ''
+    for tag, img_id in sorted(state['images'].items()):
+        repo = tag.split(':', 1)[0] if ':' in tag else ''
+        if not repo_filter or repo == repo_filter:
+            print(f'{tag}\t{img_id}' if '{{.ID}}' in fmt else tag)
+    sys.exit(0)
+
+if args and args[0] == 'rmi':
+    target = args[1]
+    if target in state.get('fail_rmi_tags', []):
+        sys.stderr.write(f'in-use: {target}\n')
+        sys.exit(1)
+    state['images'].pop(target, None)
+    state.setdefault('removed_tags', []).append(target)
     save()
     sys.exit(0)
 
@@ -299,6 +320,7 @@ class CdPipelineTests(unittest.TestCase):
         state_overrides: dict[str, object] | None = None,
         server_overrides: dict[str, object] | None = None,
         nested_data_layout: bool = False,
+        existing_rollbacks: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path, dict[str, object]]:
         tmp = Path(tempfile.mkdtemp(prefix='cd-deploy-test-'))
         src, app_dir, web_dir = _make_synthetic_repo(tmp / 'repo', '1.5.0')
@@ -337,6 +359,8 @@ class CdPipelineTests(unittest.TestCase):
         web_dir_host.mkdir(parents=True)
         (web_dir_host / 'index.html').write_text('OLD-WEB', encoding='utf-8')
         (app_dir_host / 'docker-compose.yml').write_text('services: {}\n', encoding='utf-8')
+        for rb_name in existing_rollbacks:
+            (app_dir_host / rb_name).mkdir(parents=True, exist_ok=True)
 
         caddyfile = tmp / 'Caddyfile'
         caddyfile.write_text('@authed header Cookie *botagent_auth=secret-cookie*\n', encoding='utf-8')
@@ -477,6 +501,9 @@ class CdPipelineTests(unittest.TestCase):
         try:
             self.assertNotEqual(proc.returncode, 0)
             self.assertEqual(final_state['active_mode'], 'rollback')
+            compose_ups = [c for c in final_state.get('compose_calls', []) if 'up' in c]
+            self.assertTrue(compose_ups)
+            self.assertTrue(all('--no-build' in c for c in compose_ups), f'rollback compose up missing --no-build: {compose_ups}')
             self.assertEqual((web_dir / 'index.html').read_text(encoding='utf-8'), 'OLD-WEB')
             conn = sqlite3.connect(str(app_dir / 'data/botagent.db'))
             row = conn.execute('SELECT val FROM marker').fetchone()
@@ -515,6 +542,174 @@ class CdPipelineTests(unittest.TestCase):
             self.assertEqual(row[0], 'before-upgrade')
         finally:
             shutil.rmtree(tmp_rb, ignore_errors=True)
+
+    def test_vacuum_sqlite_snapshot_wal_fallback_preserves_live_files(self) -> None:
+        spec = importlib.util.spec_from_file_location('deploy_remote_mod', DEPLOY_SCRIPT)
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with tempfile.TemporaryDirectory(prefix='cd-wal-snap-') as tmp:
+            base = Path(tmp)
+            live_dir = base / 'live'
+            work_dir = base / 'work'
+            snap_dir = base / 'snap_dir'
+            live_dir.mkdir()
+            work_dir.mkdir()
+            snap_dir.mkdir()
+            src_db = work_dir / 'botagent.db'
+            live_db = live_dir / 'botagent.db'
+
+            conn = sqlite3.connect(str(src_db))
+            conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA wal_autocheckpoint = 0')
+            conn.execute('PRAGMA user_version = 19')
+            conn.execute('CREATE TABLE marker (val TEXT)')
+            conn.execute("INSERT INTO marker VALUES ('wal-only-row')")
+            conn.commit()
+            shutil.copy2(src_db, live_db)
+            shutil.copy2(Path(str(src_db) + '-wal'), Path(str(live_db) + '-wal'))
+            conn.close()
+
+            before_live_entries = sorted(p.name for p in live_dir.iterdir())
+            before_db_sha = hashlib.sha256(live_db.read_bytes()).hexdigest()
+            before_wal_sha = hashlib.sha256(Path(str(live_db) + '-wal').read_bytes()).hexdigest()
+
+            snap = snap_dir / 'snapshot.db'
+            ver = mod.vacuum_sqlite_snapshot(live_db, snap)
+
+            self.assertEqual(ver, 19)
+            self.assertEqual(sorted(p.name for p in live_dir.iterdir()), before_live_entries)
+            self.assertEqual(hashlib.sha256(live_db.read_bytes()).hexdigest(), before_db_sha)
+            self.assertEqual(hashlib.sha256(Path(str(live_db) + '-wal').read_bytes()).hexdigest(), before_wal_sha)
+            self.assertEqual(list(snap_dir.glob('botagent-sqlite-snap-*')), [])
+            verify_conn = sqlite3.connect(str(snap))
+            self.assertEqual(verify_conn.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(verify_conn.execute('SELECT val FROM marker').fetchall(), [('wal-only-row',)])
+            verify_conn.close()
+
+    def test_deploy_prunes_old_candidate_and_prev_release_tags_only(self) -> None:
+        seeded_images = {
+            'qqchat-agent:latest': 'sha256:' + ('a' * 64),
+            'qqchat-agent:prev': 'sha256:' + ('1' * 64),
+            'qqchat-agent:release-20250101T000000Z': 'sha256:' + ('2' * 64),
+            'mlikiowa/napcat-docker:latest': 'sha256:' + ('3' * 64),
+            'qqchat-agent:prev-release-20250101T000000Z': 'sha256:' + ('4' * 64),
+            'qqchat-agent:prev-release-20250102T000000Z': 'sha256:' + ('5' * 64),
+            'qqchat-agent:prev-release-20250103T000000Z': 'sha256:' + ('6' * 64),
+            'qqchat-agent:prev-release-20250104T000000Z': 'sha256:' + ('7' * 64),
+            'qqchat-agent:candidate-20250101T000000Z': 'sha256:' + ('8' * 64),
+            'qqchat-agent:candidate-20250102T000000Z': 'sha256:' + ('9' * 64),
+            'qqchat-agent:candidate-20250103T000000Z': 'sha256:' + ('c' * 64),
+            'qqchat-agent:candidate-20250104T000000Z': 'sha256:' + ('d' * 64),
+        }
+        proc, tmp, app_dir, _, final_state = self._run_deploy_scenario(
+            state_overrides={
+                'images': seeded_images,
+                'fail_rmi_tags': ['qqchat-agent:candidate-20250101T000000Z'],
+            },
+            existing_rollbacks=(
+                'rollback-release-20250103T000000Z',
+                'rollback-release-20250104T000000Z',
+            ),
+        )
+        try:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            receipt_data = json.loads((tmp / 'receipt.json').read_text(encoding='utf-8'))
+            stamp = receipt_data['stamp']
+            removed = set(final_state.get('removed_tags', []))
+            expected_removed = {
+                'qqchat-agent:prev-release-20250101T000000Z',
+                'qqchat-agent:prev-release-20250102T000000Z',
+                'qqchat-agent:candidate-20250102T000000Z',
+                'qqchat-agent:candidate-20250103T000000Z',
+            }
+            self.assertEqual(removed, expected_removed)
+            self.assertEqual(set(receipt_data['backend']['prunedImageTags']), expected_removed)
+            remaining = set(final_state['images'].keys())
+            self.assertIn('qqchat-agent:latest', remaining)
+            self.assertIn('qqchat-agent:prev', remaining)
+            self.assertIn('qqchat-agent:release-20250101T000000Z', remaining)
+            self.assertIn('mlikiowa/napcat-docker:latest', remaining)
+            self.assertIn('qqchat-agent:prev-release-20250103T000000Z', remaining)
+            self.assertIn('qqchat-agent:prev-release-20250104T000000Z', remaining)
+            self.assertIn(f'qqchat-agent:prev-release-{stamp}', remaining)
+            self.assertIn(f'qqchat-agent:candidate-{stamp}', remaining)
+            self.assertIn('qqchat-agent:candidate-20250104T000000Z', remaining)
+            # Failed rmi must be tolerated and kept out of prunedImageTags.
+            self.assertIn('qqchat-agent:candidate-20250101T000000Z', remaining)
+            self.assertEqual(len([p for p in app_dir.iterdir() if p.name.startswith('rollback-release-')]), 3)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rollback_fails_closed_when_tag_missing_and_retries_transient_url_error(self) -> None:
+        spec = importlib.util.spec_from_file_location('deploy_remote_mod', DEPLOY_SCRIPT)
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with tempfile.TemporaryDirectory(prefix='cd-rb-unit-') as tmp:
+            base = Path(tmp)
+            app_dir = base / 'app'
+            data_dir = app_dir / 'data'
+            rb_dir = app_dir / 'rollback-release-20250101T000000Z'
+            rb_dir.mkdir(parents=True)
+            data_dir.mkdir(parents=True)
+            (app_dir / 'docker-compose.yml').write_text('services: {}\n', encoding='utf-8')
+            state_file = base / 'docker_state.json'
+            state_file.write_text(json.dumps({
+                'napcat_id': 'napcat-abc',
+                'bot_image': 'sha256:' + ('b' * 64),
+                'bot_networks': ['qqchat'],
+                'bot_health': 'running healthy',
+                'bot_running': True,
+                'active_mode': 'candidate',
+                'images': {'qqchat-agent:prev': 'sha256:' + ('a' * 64)},
+            }), encoding='utf-8')
+            fake_docker = base / 'fake_docker.py'
+            fake_docker.write_text(FAKE_DOCKER_TEMPLATE, encoding='utf-8')
+            if os.name == 'nt':
+                docker_cmd = base / 'fake_docker.cmd'
+                docker_cmd.write_text(f'@echo off\r\n"{sys.executable}" "{fake_docker}" %*\r\n', encoding='utf-8')
+            else:
+                docker_cmd = fake_docker
+                os.chmod(docker_cmd, 0o755)
+
+            old_env_state = os.environ.get('FAKE_DOCKER_STATE')
+            old_env_bin = os.environ.get('BOTAGENT_DOCKER_BIN')
+            old_http = mod.http_request
+            os.environ['FAKE_DOCKER_STATE'] = str(state_file)
+            os.environ['BOTAGENT_DOCKER_BIN'] = str(docker_cmd)
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'prev-release-20250101T000000Z'):
+                    mod.restore_backend_from_rollback(rb_dir, app_dir, data_dir, [], 'http://127.0.0.1:9', 5)
+
+                state = json.loads(state_file.read_text(encoding='utf-8'))
+                state['images']['qqchat-agent:prev-release-20250101T000000Z'] = 'sha256:' + ('a' * 64)
+                state_file.write_text(json.dumps(state), encoding='utf-8')
+
+                attempts = {'n': 0}
+
+                def flaky_http(url: str, *, host_header: str = '', cookie: str = '', timeout: int = 8):
+                    attempts['n'] += 1
+                    if attempts['n'] == 1:
+                        raise urllib.error.URLError(ConnectionRefusedError(111, 'refused'))
+                    return 200, {}, '{"status":"ok"}'
+
+                mod.http_request = flaky_http
+                res = mod.restore_backend_from_rollback(rb_dir, app_dir, data_dir, [], 'http://127.0.0.1:9', 10)
+                self.assertEqual(res, {'restoredImageTag': 'qqchat-agent:prev-release-20250101T000000Z', 'healthz': 200})
+                self.assertEqual(attempts['n'], 2)
+            finally:
+                mod.http_request = old_http
+                if old_env_state is None:
+                    os.environ.pop('FAKE_DOCKER_STATE', None)
+                else:
+                    os.environ['FAKE_DOCKER_STATE'] = old_env_state
+                if old_env_bin is None:
+                    os.environ.pop('BOTAGENT_DOCKER_BIN', None)
+                else:
+                    os.environ['BOTAGENT_DOCKER_BIN'] = old_env_bin
 
 
 if __name__ == '__main__':

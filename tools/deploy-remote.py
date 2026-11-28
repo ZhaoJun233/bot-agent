@@ -298,15 +298,52 @@ def find_sqlite_db(runtime_root: Path) -> Path | None:
     return None
 
 
+SQLITE_SIDECARS = ('-wal', '-shm', '-journal')
+
+
+def _copy_sqlite_with_sidecars(db_path: Path, dst_dir: Path) -> Path:
+    dst_db = dst_dir / db_path.name
+    shutil.copyfile(db_path, dst_db)
+    os.chmod(dst_db, 0o600)
+    for suffix in SQLITE_SIDECARS:
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.is_file():
+            dst_sidecar = dst_dir / (db_path.name + suffix)
+            shutil.copyfile(sidecar, dst_sidecar)
+            os.chmod(dst_sidecar, 0o600)
+    return dst_db
+
+
 def vacuum_sqlite_snapshot(db_path: Path, snapshot_path: Path) -> int:
     if snapshot_path.exists():
         snapshot_path.unlink()
-    src = sqlite3.connect(f'file:{db_path.as_posix()}?mode=ro', uri=True)
-    try:
-        escaped = str(snapshot_path).replace("'", "''")
-        src.execute(f"VACUUM INTO '{escaped}'")
-    finally:
-        src.close()
+    escaped = str(snapshot_path).replace("'", "''")
+
+    def _vacuum_via_isolated_copy() -> None:
+        if snapshot_path.exists():
+            snapshot_path.unlink()
+        # Recover uncheckpointed WAL/journal inside disk-backed snapshot dir without touching live DB files or /tmp tmpfs.
+        with tempfile.TemporaryDirectory(prefix='botagent-sqlite-snap-', dir=str(snapshot_path.parent)) as tmp_dir:
+            tmp_db = _copy_sqlite_with_sidecars(db_path, Path(tmp_dir))
+            rw = sqlite3.connect(str(tmp_db))
+            try:
+                rw.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                rw.execute(f"VACUUM INTO '{escaped}'")
+            finally:
+                rw.close()
+
+    has_sidecars = any(Path(str(db_path) + suffix).is_file() for suffix in SQLITE_SIDECARS)
+    if has_sidecars:
+        _vacuum_via_isolated_copy()
+    else:
+        try:
+            src = sqlite3.connect(f'file:{db_path.as_posix()}?mode=ro', uri=True)
+            try:
+                src.execute(f"VACUUM INTO '{escaped}'")
+            finally:
+                src.close()
+        except sqlite3.OperationalError:
+            _vacuum_via_isolated_copy()
     os.chmod(snapshot_path, 0o600)
     dst = sqlite3.connect(str(snapshot_path))
     try:
@@ -349,7 +386,7 @@ def restore_backend_from_rollback(
         default_db = (runtime_root / 'data/botagent.db') if (runtime_root / 'data').is_dir() else (runtime_root / 'botagent.db')
         target_db = live_db if live_db else default_db
         target_db.parent.mkdir(parents=True, exist_ok=True)
-        for suffix in ('-wal', '-shm'):
+        for suffix in SQLITE_SIDECARS:
             sidecar = Path(str(target_db) + suffix)
             if sidecar.exists():
                 sidecar.unlink()
@@ -372,13 +409,15 @@ def restore_backend_from_rollback(
 
     prev_tag = f'qqchat-agent:prev-release-{rollback_dir.name.removeprefix("rollback-release-")}'
     check_tag = docker(['image', 'inspect', '--format', '{{.Id}}', prev_tag], timeout=20)
-    tag_source = prev_tag if check_tag.returncode == 0 else 'qqchat-agent:prev'
+    if check_tag.returncode != 0:
+        raise RuntimeError(f'Missing rollback image tag {prev_tag}; refusing unsafe fallback to :prev')
+    tag_source = prev_tag
     res = docker(['tag', tag_source, 'qqchat-agent:latest'], timeout=20)
     if res.returncode != 0:
         raise RuntimeError(f'Failed to re-tag rollback image {tag_source}')
 
     compose_base = ['compose', '-p', 'qqchat', '--project-directory', str(app_dir), '-f', str(app_dir / 'docker-compose.yml')]
-    up_res = docker([*compose_base, 'up', '-d', '--no-deps', 'qqchat'], timeout=120)
+    up_res = docker([*compose_base, 'up', '-d', '--no-deps', '--no-build', 'qqchat'], timeout=120)
     if up_res.returncode != 0:
         raise RuntimeError(f'Rollback docker compose up failed: {up_res.stderr}')
 
@@ -389,7 +428,10 @@ def restore_backend_from_rollback(
 
     deadline = time.monotonic() + min(timeout_sec, 90)
     while time.monotonic() < deadline:
-        code, _, _ = http_request(health_url.rstrip('/') + '/healthz', timeout=5)
+        try:
+            code, _, _ = http_request(health_url.rstrip('/') + '/healthz', timeout=5)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            code = 0
         if code == 200:
             return {'restoredImageTag': tag_source, 'healthz': 200}
         time.sleep(2)
@@ -423,6 +465,45 @@ def prune_old_rollbacks(app_dir: Path, prefix: str, keep: int, protected: set[st
         shutil.rmtree(old, ignore_errors=True)
 
 
+def prune_old_image_tags(app_dir: Path, keep_candidates: int, keep_rollbacks: int, protected_tags: set[str]) -> list[str]:
+    res = docker(['images', 'qqchat-agent', '--format', '{{.Repository}}:{{.Tag}}'], timeout=20)
+    if res.returncode != 0:
+        return []
+    prev_tags: set[str] = set()
+    candidate_tags: set[str] = set()
+    for line in res.stdout.splitlines():
+        ref = line.split('\t', 1)[0].strip()
+        if ':' not in ref:
+            continue
+        repo, tag = ref.split(':', 1)
+        if repo != 'qqchat-agent':
+            continue
+        if tag.startswith('prev-release-'):
+            prev_tags.add(ref)
+        elif tag.startswith('candidate-'):
+            candidate_tags.add(ref)
+
+    to_remove: list[str] = []
+    if keep_rollbacks > 0:
+        surviving_prev = {
+            f'qqchat-agent:prev-release-{p.name.removeprefix("rollback-release-")}'
+            for p in app_dir.iterdir()
+            if p.is_dir() and p.name.startswith('rollback-release-')
+        }
+        to_remove.extend(sorted(ref for ref in prev_tags if ref not in surviving_prev and ref not in protected_tags))
+    if keep_candidates > 0:
+        ordered_candidates = sorted(candidate_tags, reverse=True)
+        keep_candidate_set = set(ordered_candidates[:keep_candidates]) | protected_tags
+        to_remove.extend(ref for ref in ordered_candidates if ref not in keep_candidate_set)
+
+    pruned: list[str] = []
+    for old_ref in to_remove:
+        rm_res = docker(['rmi', old_ref], timeout=30)
+        if rm_res.returncode == 0:
+            pruned.append(old_ref)
+    return pruned
+
+
 def wait_backend_ready(
     napcat_before: str | None,
     health_url: str,
@@ -449,7 +530,12 @@ def wait_backend_ready(
             time.sleep(2)
             continue
 
-        h_code, _, h_body = http_request(health_url.rstrip('/') + '/healthz', timeout=5)
+        try:
+            h_code, _, h_body = http_request(health_url.rstrip('/') + '/healthz', timeout=5)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_reason = f'healthz_err={type(exc).__name__}'
+            time.sleep(2)
+            continue
         if h_code != 200:
             last_reason = f'healthz={h_code}'
             time.sleep(2)
@@ -465,7 +551,12 @@ def wait_backend_ready(
         if allow_unready:
             return {'version': actual_ver or expected_version, 'healthz': 200, 'readyz': 'skipped'}
 
-        r_code, _, r_body = http_request(health_url.rstrip('/') + '/readyz', timeout=5)
+        try:
+            r_code, _, r_body = http_request(health_url.rstrip('/') + '/readyz', timeout=5)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_reason = f'readyz_err={type(exc).__name__}'
+            time.sleep(2)
+            continue
         if r_code == 200:
             try:
                 r_json = json.loads(r_body)
@@ -631,13 +722,13 @@ def deploy_backend_stage(
             **ready_info,
         }
     except Exception:
-        if adopted:
-            restore_backend_from_rollback(rollback_dir, app_dir, data_dir, extra_networks, health_url, timeout_sec)
-            if web_backup_dir and web_backup_dir.is_dir():
-                restore_web_backup(web_backup_dir, web_dir)
-        elif stopped:
-            docker(['start', 'qqchat-bot'], timeout=60)
-            if web_backup_dir and web_backup_dir.is_dir():
+        try:
+            if adopted:
+                restore_backend_from_rollback(rollback_dir, app_dir, data_dir, extra_networks, health_url, timeout_sec)
+            elif stopped:
+                docker(['start', 'qqchat-bot'], timeout=60)
+        finally:
+            if (adopted or stopped) and web_backup_dir and web_backup_dir.is_dir():
                 restore_web_backup(web_backup_dir, web_dir)
         raise
     finally:
@@ -759,6 +850,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         receipt['backend'] = backend_result
         prune_old_rollbacks(app_dir, 'rollback-release-', args.keep_rollbacks, {f'rollback-release-{stamp}'})
+        pruned_tags = prune_old_image_tags(
+            app_dir,
+            2,
+            args.keep_rollbacks,
+            {f'qqchat-agent:candidate-{stamp}', f'qqchat-agent:prev-release-{stamp}'},
+        )
+        if isinstance(backend_result, dict):
+            backend_result['prunedImageTags'] = pruned_tags
 
     if napcat_before is not None and container_identity('qqchat-napcat') != napcat_before:
         raise RuntimeError('qqchat-napcat identity changed after deployment')

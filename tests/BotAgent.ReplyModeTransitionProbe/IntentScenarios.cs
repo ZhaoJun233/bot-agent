@@ -21,7 +21,7 @@ internal static class IntentScenarios
             f.Pipeline.RequestReply(conversation, null);
             f.Pipeline.IdleFallbackTick();
         }
-        await f.Advance(60000); await f.Idle();
+        await TransitionClock.AdvanceUntilIdle(f, 60000);
         Check(f.Source.Sends.IsEmpty && f.Model.History.Count == 1,
             "maintenance and repeated requests cannot replay a silent ordinary opportunity");
     }
@@ -31,7 +31,7 @@ internal static class IntentScenarios
         await using var f = new Fixture(s => s.GroupInterjectionProbability = 0);
         var conversation = await f.Inbound("synthetic rejected ordinary input");
         for (var i = 0; i < 5; i++) f.Pipeline.RequestReply(conversation, null, proactive: proactive);
-        await f.Advance(60000); await f.Idle();
+        await TransitionClock.AdvanceUntilIdle(f, 60000);
         Check(f.Source.Sends.IsEmpty && f.Model.History.IsEmpty && f.PacedCount == 0,
             "null ordinary/proactive requests cannot manufacture accepted-result intent");
     }

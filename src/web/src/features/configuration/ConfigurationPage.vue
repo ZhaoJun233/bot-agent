@@ -258,6 +258,9 @@ let leaveTrigger: HTMLElement | null = null
 let leaveGeneration = 0
 
 let loadSequence = 0
+type ReloadOutcome = 'ok' | 'superseded' | 'failed'
+let pendingInteractiveError = false
+let activeLoad: Promise<ReloadOutcome> | null = null
 
 const counts = computed<Record<SectionKey, number>>(() => {
   const result: Record<SectionKey, number> = {
@@ -684,41 +687,63 @@ function reportAuthFailure(cause: unknown): boolean {
  * （计划要求后台把 status/配置重读一遍，同时保留各自的草稿与错误语义）。
  * 返回 false 表示这次读取确实失败，调用方（调度器）据此不签"已追平"。
  */
-async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'): Promise<boolean> {
+async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'): Promise<ReloadOutcome> {
   const sequence = ++loadSequence
-  loading.value = true
-  error.value = null
-  try {
-    const next = await props.client.readConfiguration(1)
-    if (sequence !== loadSequence) return false
-    // 代际变化：旧写计划作废（计划 §9.3 第 242 行）。草稿保留，由用户决定。
-    // 保存中 / 结果未知 / 冲突是尚未结束的提交上下文：不能悄悄改回 idle，
-    // 否则迟到的保存结果被丢弃、核对入口消失、冲突提示被抹掉。
-    // 结果未知的旧键交给"核对"去拿权威答复（代际已变化 = code 6）。
-    if (mode === 'background' && snapshot.value !== null
-      && snapshot.value.generation !== next.generation) {
-      const open = phase.value === 'saving' || phase.value === 'unconfirmed' || phase.value === 'conflict'
-      if (!open) {
-        phase.value = 'idle'
-        pendingKey.value = null
-        pendingNames.value = {}
+  const interactive = mode === 'interactive'
+  if (interactive) {
+    loading.value = true
+    error.value = null
+    pendingInteractiveError = true
+  }
+  let task!: Promise<ReloadOutcome>
+  task = (async (): Promise<ReloadOutcome> => {
+    try {
+      const next = await props.client.readConfiguration(1)
+      if (sequence !== loadSequence) return 'superseded'
+      // 代际变化：旧写计划作废（计划 §9.3 第 242 行）。草稿保留，由用户决定。
+      // 保存中 / 结果未知 / 冲突是尚未结束的提交上下文：不能悄悄改回 idle，
+      // 否则迟到的保存结果被丢弃、核对入口消失、冲突提示被抹掉。
+      // 结果未知的旧键交给"核对"去拿权威答复（代际已变化 = code 6）。
+      if (mode === 'background' && snapshot.value !== null
+        && snapshot.value.generation !== next.generation) {
+        const open = phase.value === 'saving' || phase.value === 'unconfirmed' || phase.value === 'conflict'
+        if (!open) {
+          phase.value = 'idle'
+          pendingKey.value = null
+          pendingNames.value = {}
+        }
+        if (hasDraft.value) {
+          validationMessage.value = '配置代际已变化（服务重启或重新加载）。草稿已保留；保存时会先按起草时的版本核对，有冲突会提示你读取最新。'
+        }
       }
-      if (hasDraft.value) {
-        validationMessage.value = '配置代际已变化（服务重启或重新加载）。草稿已保留；保存时会先按起草时的版本核对，有冲突会提示你读取最新。'
+      snapshot.value = next
+      error.value = null
+      loadedAt.value = formatTime(new Date().toISOString())
+      return 'ok'
+    } catch (cause) {
+      if (sequence !== loadSequence) return 'superseded'
+      // 认证失效也是"没读到"：不能签已追平。
+      if (reportAuthFailure(cause)) return 'failed'
+      if (interactive || pendingInteractiveError) error.value = toUiError(cause)
+      return 'failed'
+    } finally {
+      if (sequence === loadSequence) {
+        loading.value = false
+        pendingInteractiveError = false
+        if (activeLoad === task) activeLoad = null
       }
     }
-    snapshot.value = next
-    loadedAt.value = formatTime(new Date().toISOString())
-    return true
-  } catch (cause) {
-    if (sequence !== loadSequence) return false
-    // 认证失效也是"没读到"：不能签已追平。
-    if (reportAuthFailure(cause)) return false
-    error.value = toUiError(cause)
-    return false
-  } finally {
-    if (sequence === loadSequence) loading.value = false
+  })()
+  activeLoad = task
+  return task
+}
+
+async function settleLoad(outcome: ReloadOutcome): Promise<ReloadOutcome> {
+  let current = outcome
+  while (current === 'superseded' && activeLoad !== null) {
+    current = await activeLoad
   }
+  return current
 }
 
 // ── 共享事件同步（计划 §9.3：配置也是五类补读之一） ──────────────────
@@ -731,7 +756,9 @@ function attachScheduler(client: ZbaClient): void {
     name: 'configuration',
     matches: (event) => event.type === 'configuration.saved',
     reload: async () => {
-      if (!(await reloadBaseline('background'))) throw new Error('configuration_read_failed')
+      if ((await settleLoad(await reloadBaseline('background'))) === 'failed') {
+        throw new Error('configuration_read_failed')
+      }
     }
   })
   detachScheduler.value = () => {
@@ -1212,6 +1239,8 @@ function endSession(): void {
   loadSequence += 1
   findSequence += 1
   loading.value = false
+  pendingInteractiveError = false
+  activeLoad = null
   findBusy.value = false
   detachScheduler.value?.()
   detachScheduler.value = null
@@ -1254,8 +1283,8 @@ onBeforeUnmount(() => {
 })
 
 /** 用户显式「重新读取」：交互式语义（撤下旧基线），不接受参数。 */
-function reload(): Promise<boolean> {
-  return reloadBaseline('interactive')
+async function reload(): Promise<boolean> {
+  return (await settleLoad(await reloadBaseline('interactive'))) === 'ok'
 }
 
 defineExpose({
