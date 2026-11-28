@@ -2255,8 +2255,13 @@ public static partial class Program
     private sealed class FakeModelTransport : IModelTransport
     {
         private readonly bool _emptyChoices;
+        private readonly string? _rawContent;
 
-        public FakeModelTransport(bool emptyChoices = false) => _emptyChoices = emptyChoices;
+        public FakeModelTransport(bool emptyChoices = false, string? rawContent = null)
+        {
+            _emptyChoices = emptyChoices;
+            _rawContent = rawContent;
+        }
 
         public Task<BuiltRequest> BuildAsync(IReadOnlyList<ChatMessage> window, string systemContent,
             IReadOnlyCollection<long> quotableIds, CancellationToken ct, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
@@ -2264,7 +2269,7 @@ public static partial class Program
 
         public Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct)
         {
-            var content = new JsonObject { ["reply"] = "收到，我在", ["suitability"] = 88, ["action"] = "reply" }.ToJsonString();
+            var content = _rawContent ?? new JsonObject { ["reply"] = "收到，我在", ["suitability"] = 88, ["action"] = "reply" }.ToJsonString();
             var body = _emptyChoices
                 ? "{\"choices\":[]}"
                 : new JsonObject
@@ -2415,6 +2420,12 @@ public static partial class Program
             new OpenAiClient(new Services.SettingsBox(settings), new FakeHttpFetcher(), new FakeHttpFetcher(),
                 new FakeImageDownloader(), new FakeModelTransport(emptyChoices: true))
                 .CompleteAsync(window, ct: CancellationToken.None).GetAwaiter().GetResult().UpstreamEmpty);
+        var blankCompletion = new OpenAiClient(new Services.SettingsBox(settings), new FakeHttpFetcher(), new FakeHttpFetcher(),
+                new FakeImageDownloader(), new FakeModelTransport(rawContent: "   "))
+            .CompleteAsync(window, ct: CancellationToken.None).GetAwaiter().GetResult();
+        Check("假传输 · 上游回空白 content 也会标为 upstream_empty",
+            blankCompletion.UpstreamEmpty && blankCompletion.Malformed && blankCompletion.ReasonCode == "upstream_empty",
+            $"实际 empty={blankCompletion.UpstreamEmpty}, malformed={blankCompletion.Malformed}, reason={blankCompletion.ReasonCode}");
 
         // ④ 假模型客户端：拿它替代真客户端（这就是 IModelClient 存在的理由）
         IModelClient asPort = new FakeModelClient();

@@ -139,18 +139,34 @@ public sealed class InlineTurnTools
             var inlineCall = result.Call!;
             if (inlineCall.ToolId is "web.search" or "web.read")
             {
-                var argKey = inlineCall.ToolId == "web.search" ? "query" : "url";
-                if (!inlineCall.Arguments.TryGetValue(argKey, out var argVal) || string.IsNullOrWhiteSpace(argVal))
+                if (!TryResolveWebArgument(inlineCall, out var isSearch, out var argVal))
                 {
                     RecordGateDenied(conversation.SourceKey, inlineCall.ToolId, "missing_argument");
                     return null;
                 }
-                return await RunWebToolAsync(conversation, snapshot, caps, inlineCall.ToolId == "web.search", argVal, platformPolicy, ct, conversationSettings);
+                return await RunWebToolAsync(conversation, snapshot, caps, isSearch, argVal, platformPolicy, ct, conversationSettings);
             }
             return await RunPluginCallAsync(conversation, snapshot, caps, inlineCall, platformPolicy, ct, conversationSettings);
         }
 
         return await RunMemoryInlineListenAsync(conversation, snapshot, caps, result.Listen!, platformPolicy, ct, conversationSettings);
+    }
+
+    /// <summary>归一化模型以 call 形式传入的联网工具参数别名（兼容 query/search/q 与 url/read）。</summary>
+    internal static bool TryResolveWebArgument(InlineToolCall call, out bool isSearch, out string value)
+    {
+        isSearch = call.ToolId == "web.search";
+        ReadOnlySpan<string> keys = isSearch ? ["query", "search", "q"] : ["url", "read"];
+        foreach (var key in keys)
+        {
+            if (call.Arguments.TryGetValue(key, out var raw) && !string.IsNullOrWhiteSpace(raw))
+            {
+                value = raw.Trim();
+                return true;
+            }
+        }
+        value = string.Empty;
+        return false;
     }
 
     private async Task<string?> RunWebToolAsync(

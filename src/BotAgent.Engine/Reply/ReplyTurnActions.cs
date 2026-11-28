@@ -318,6 +318,21 @@ internal sealed class ReplyTurnActions(
         Domain.Permissions.ChatCapabilitySet caps, EffectiveConversationSettings effective)
     {
         var id = inlineCall.ToolId;
+        if (id is "web.search" or "web.read")
+        {
+            if (!_research.IsReady || !InlineTurnTools.TryResolveWebArgument(inlineCall, out var isSearch, out var argVal))
+                return;
+            var webCall = new ToolCall(id, new JsonObject { [isSearch ? "query" : "url"] = argVal });
+            var webBinding = caps.Catalog.FindBinding(id);
+            if (webBinding is not null && _replyTools.Allows(snapshot, effective.EffectivePolicy, id, caps.Catalog, effective)
+                && ToolArguments.Validate(webBinding.Definition, webCall.Arguments).Ok
+                && _approvals.AllowCapability(conversation, id, argVal, out _, pinned: caps))
+            {
+                await ReplyCommitBoundary.BeforeEffectAsync();
+                QueueResearch(conversation, webCall, webBinding, snapshot, effective.EffectivePolicy, caps.Catalog, effective);
+            }
+            return;
+        }
         var binding = caps.Catalog.FindBinding(id);
         if (binding is null || !binding.Definition.Spec.ReadOnly || binding.Definition.Spec.Origin is not (ToolOrigin.Plugin or ToolOrigin.Mcp))
             return;

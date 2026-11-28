@@ -40,6 +40,7 @@ internal static partial class ReviewEngineRegression
             await MediaAdvertisementBoundary();
             await PlainSendCommitBoundary();
             await QueueMembershipBoundary();
+            await QueuedWebCallAliasBoundary();
         }
         finally { EngineClock.Initialize(previousClock); }
     }
@@ -280,6 +281,41 @@ internal static partial class ReviewEngineRegression
 
     }
 
+    private static async Task QueuedWebCallAliasBoundary()
+    {
+        var settings = new AppSettings { EnableWebSearch = true, MaxAgentSteps = 1, WebSearchCooldownSeconds = 30 };
+        var box = new Box(settings);
+        var research = new Research { RejectSecondCooldown = true };
+        var catalog = ResearchToolFixture.Create(research);
+        var caps = ResearchToolFixture.Capabilities(true, false, false, false, false, null, catalog: catalog);
+        var policies = new Policies(Policy(true));
+        var hooks = new ReplyHooks(_ => { }, () => 10001, () => false);
+        var replyTools = new ReplyToolAvailability(null, policies, () => false, () => true, () => catalog);
+        var approvals = new ApprovalUseCase(box,
+            new ApprovalHooks(_ => { }, (text, _) => text, (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
+            new SessionPolicyLedger(), new TurnTraceStore(), catalog: () => catalog);
+        var participation = new ParticipationUseCase(box, _ => { });
+        var queued = new List<Func<CancellationToken, Task>>();
+        var actionsType = typeof(ReplyPipeline).Assembly.GetType("BotAgent.Services.Reply.ReplyTurnActions")!;
+        var ctor = actionsType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Single();
+        var actions = ctor.Invoke([
+            box, hooks, replyTools, research, null!, null!, null!, approvals, participation, policies,
+            null!, null!, (Func<string, bool>)(_ => true),
+            (Func<string, string, Func<CancellationToken, Task>, bool>)((_, _, work) => { queued.Add(work); return true; }),
+            (Action<BotConversation, AppSettings>)((_, _) => { }), null!
+        ]);
+        var queueMethod = actionsType.GetMethod("QueueTurnActions", BindingFlags.Instance | BindingFlags.Public)!;
+        var conv = Conversation();
+        var callAlias = new CompletionResult(null, null, null,
+            Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["search"] = "queued-alias" }));
+        await (Task)queueMethod.Invoke(actions, [conv, settings, caps, Policy(true), callAlias, true, null!])!;
+        await (Task)queueMethod.Invoke(actions, [conv, settings, caps, Policy(true), callAlias, true, null!])!;
+        Ensure(queued.Count == 1 && research.Cooldowns == 2,
+            "Queued web.search call alias normalizes arguments and respects cooldown");
+        await queued[0](CancellationToken.None);
+        Ensure(research.Calls == 1, "Queued web.search call alias executes bound contribution once");
+    }
+
     private sealed class FixedClock : IClock
     {
         public DateTimeOffset Now => DateTimeOffset.UnixEpoch;
@@ -307,8 +343,15 @@ internal static partial class ReviewEngineRegression
     private sealed class Research : IResearchUseCase
     {
         public int Calls, Cooldowns;
+        public bool RejectSecondCooldown;
         public bool IsReady => true;
-        public bool TryBeginSearch(string key, int cooldown, out string reason) { Cooldowns++; reason = "enabled"; return true; }
+        public bool TryBeginSearch(string key, int cooldown, out string reason)
+        {
+            Cooldowns++;
+            if (RejectSecondCooldown && Cooldowns > 1) { reason = "cooldown"; return false; }
+            reason = "enabled";
+            return true;
+        }
         public Task<WebSearchResult?> SearchAsync(string key, string query, CancellationToken ct = default)
         { Calls++; return Task.FromResult<WebSearchResult?>(new(query, "synthetic answer", Array.Empty<WebSearchHit>(), "synthetic")); }
         public Task<string?> ReadPageAsync(string key, string url, CancellationToken ct = default)
