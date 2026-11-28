@@ -57,7 +57,7 @@ public sealed class GeminiGroundedTextModel(IModelHttpFetcher http, Func<ModelOp
     {
         JsonNode? root;
         try { root = JsonNode.Parse(body); }
-        catch (JsonException) { return Failure("model_invalid_json"); }
+        catch (JsonException) { return Failure("model_malformed_response"); }
         var candidate = root?["candidates"]?[0];
         var text = new StringBuilder();
         if (candidate?["content"]?["parts"]?.AsArray() is { } parts)

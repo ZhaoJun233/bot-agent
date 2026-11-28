@@ -100,6 +100,6 @@ internal static class EndpointChecks
         var invalidJson = await new GeminiGroundedTextModel(htmlHttp, () => new ModelOptions
             { BaseUrl = "https://example.com/v1", ApiKey = "synthetic-key", Model = "example-model" })
             .GenerateAsync(new GroundedTextRequest("synthetic", 0.2, 128), CancellationToken.None);
-        check(invalidJson.ErrorCode == "model_invalid_json", "GeminiGroundedTextModel returns model_invalid_json on non-JSON body");
+        check(invalidJson.ErrorCode == "model_malformed_response", "GeminiGroundedTextModel returns model_malformed_response on non-JSON body");
     }
 }
