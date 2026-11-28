@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -128,6 +129,21 @@ if args[:2] == ['network', 'connect']:
     net = args[2]
     if net not in state['bot_networks']:
         state['bot_networks'].append(net)
+    save()
+    sys.exit(0)
+
+if args and args[0] == 'images':
+    repo_filter = args[1] if len(args) > 1 and not args[1].startswith('-') else ''
+    for tag, img_id in sorted(state['images'].items()):
+        repo = tag.split(':', 1)[0] if ':' in tag else ''
+        if not repo_filter or repo == repo_filter:
+            print(f'{tag}\t{img_id}')
+    sys.exit(0)
+
+if args and args[0] == 'rmi':
+    target = args[1]
+    state['images'].pop(target, None)
+    state.setdefault('removed_tags', []).append(target)
     save()
     sys.exit(0)
 
@@ -477,6 +493,9 @@ class CdPipelineTests(unittest.TestCase):
         try:
             self.assertNotEqual(proc.returncode, 0)
             self.assertEqual(final_state['active_mode'], 'rollback')
+            compose_ups = [c for c in final_state.get('compose_calls', []) if 'up' in c]
+            self.assertTrue(compose_ups)
+            self.assertTrue(all('--no-build' in c for c in compose_ups), f'rollback compose up missing --no-build: {compose_ups}')
             self.assertEqual((web_dir / 'index.html').read_text(encoding='utf-8'), 'OLD-WEB')
             conn = sqlite3.connect(str(app_dir / 'data/botagent.db'))
             row = conn.execute('SELECT val FROM marker').fetchone()
@@ -515,6 +534,90 @@ class CdPipelineTests(unittest.TestCase):
             self.assertEqual(row[0], 'before-upgrade')
         finally:
             shutil.rmtree(tmp_rb, ignore_errors=True)
+
+    def test_vacuum_sqlite_snapshot_wal_fallback_preserves_live_files(self) -> None:
+        spec = importlib.util.spec_from_file_location('deploy_remote_mod', DEPLOY_SCRIPT)
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        with tempfile.TemporaryDirectory(prefix='cd-wal-snap-') as tmp:
+            base = Path(tmp)
+            live_dir = base / 'live'
+            work_dir = base / 'work'
+            live_dir.mkdir()
+            work_dir.mkdir()
+            src_db = work_dir / 'botagent.db'
+            live_db = live_dir / 'botagent.db'
+
+            conn = sqlite3.connect(str(src_db))
+            conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA wal_autocheckpoint = 0')
+            conn.execute('PRAGMA user_version = 19')
+            conn.execute('CREATE TABLE marker (val TEXT)')
+            conn.execute("INSERT INTO marker VALUES ('wal-only-row')")
+            conn.commit()
+            shutil.copy2(src_db, live_db)
+            shutil.copy2(Path(str(src_db) + '-wal'), Path(str(live_db) + '-wal'))
+            conn.close()
+
+            before_db_sha = hashlib.sha256(live_db.read_bytes()).hexdigest()
+            before_wal_sha = hashlib.sha256(Path(str(live_db) + '-wal').read_bytes()).hexdigest()
+
+            real_connect = mod.sqlite3.connect
+
+            def fake_connect(database, *args, **kwargs):
+                if isinstance(database, str) and '?mode=ro' in database:
+                    raise sqlite3.OperationalError('attempt to write a readonly database')
+                return real_connect(database, *args, **kwargs)
+
+            mod.sqlite3.connect = fake_connect
+            try:
+                snap = base / 'snapshot.db'
+                ver = mod.vacuum_sqlite_snapshot(live_db, snap)
+            finally:
+                mod.sqlite3.connect = real_connect
+
+            self.assertEqual(ver, 19)
+            self.assertEqual(hashlib.sha256(live_db.read_bytes()).hexdigest(), before_db_sha)
+            self.assertEqual(hashlib.sha256(Path(str(live_db) + '-wal').read_bytes()).hexdigest(), before_wal_sha)
+            verify_conn = sqlite3.connect(str(snap))
+            self.assertEqual(verify_conn.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(verify_conn.execute('SELECT val FROM marker').fetchall(), [('wal-only-row',)])
+            verify_conn.close()
+
+    def test_deploy_prunes_old_candidate_and_prev_release_tags_only(self) -> None:
+        seeded_images = {
+            'qqchat-agent:latest': 'sha256:' + ('a' * 64),
+            'qqchat-agent:prev': 'sha256:' + ('1' * 64),
+            'qqchat-agent:release-20261126T065246Z': 'sha256:' + ('2' * 64),
+            'mlikiowa/napcat-docker:latest': 'sha256:' + ('3' * 64),
+            'qqchat-agent:prev-release-20261125T000000Z': 'sha256:' + ('4' * 64),
+            'qqchat-agent:prev-release-20261126T000000Z': 'sha256:' + ('5' * 64),
+            'qqchat-agent:prev-release-20261127T000000Z': 'sha256:' + ('6' * 64),
+            'qqchat-agent:prev-release-20261128T000000Z': 'sha256:' + ('7' * 64),
+            'qqchat-agent:candidate-20261125T000000Z': 'sha256:' + ('8' * 64),
+            'qqchat-agent:candidate-20261126T000000Z': 'sha256:' + ('9' * 64),
+            'qqchat-agent:candidate-20261127T000000Z': 'sha256:' + ('c' * 64),
+            'qqchat-agent:candidate-20261128T000000Z': 'sha256:' + ('d' * 64),
+        }
+        proc, tmp, _, _, final_state = self._run_deploy_scenario(state_overrides={'images': seeded_images})
+        try:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            removed = set(final_state.get('removed_tags', []))
+            self.assertIn('qqchat-agent:prev-release-20261125T000000Z', removed)
+            self.assertIn('qqchat-agent:prev-release-20261126T000000Z', removed)
+            self.assertIn('qqchat-agent:candidate-20261125T000000Z', removed)
+            self.assertIn('qqchat-agent:candidate-20261126T000000Z', removed)
+            remaining = set(final_state['images'].keys())
+            self.assertIn('qqchat-agent:latest', remaining)
+            self.assertIn('qqchat-agent:prev', remaining)
+            self.assertIn('qqchat-agent:release-20261126T065246Z', remaining)
+            self.assertIn('mlikiowa/napcat-docker:latest', remaining)
+            self.assertNotIn('qqchat-agent:prev-release-20261125T000000Z', remaining)
+            self.assertNotIn('qqchat-agent:candidate-20261125T000000Z', remaining)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == '__main__':

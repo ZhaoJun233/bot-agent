@@ -298,15 +298,38 @@ def find_sqlite_db(runtime_root: Path) -> Path | None:
     return None
 
 
+def _copy_sqlite_with_sidecars(db_path: Path, dst_dir: Path) -> Path:
+    dst_db = dst_dir / db_path.name
+    shutil.copy2(db_path, dst_db)
+    for suffix in ('-wal', '-shm'):
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.is_file():
+            shutil.copy2(sidecar, dst_dir / (db_path.name + suffix))
+    return dst_db
+
+
 def vacuum_sqlite_snapshot(db_path: Path, snapshot_path: Path) -> int:
     if snapshot_path.exists():
         snapshot_path.unlink()
-    src = sqlite3.connect(f'file:{db_path.as_posix()}?mode=ro', uri=True)
+    escaped = str(snapshot_path).replace("'", "''")
     try:
-        escaped = str(snapshot_path).replace("'", "''")
-        src.execute(f"VACUUM INTO '{escaped}'")
-    finally:
-        src.close()
+        src = sqlite3.connect(f'file:{db_path.as_posix()}?mode=ro', uri=True)
+        try:
+            src.execute(f"VACUUM INTO '{escaped}'")
+        finally:
+            src.close()
+    except sqlite3.OperationalError:
+        if snapshot_path.exists():
+            snapshot_path.unlink()
+        # Recover uncheckpointed WAL inside an isolated copy without touching live DB files.
+        with tempfile.TemporaryDirectory(prefix='botagent-sqlite-snap-') as tmp_dir:
+            tmp_db = _copy_sqlite_with_sidecars(db_path, Path(tmp_dir))
+            rw = sqlite3.connect(str(tmp_db))
+            try:
+                rw.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                rw.execute(f"VACUUM INTO '{escaped}'")
+            finally:
+                rw.close()
     os.chmod(snapshot_path, 0o600)
     dst = sqlite3.connect(str(snapshot_path))
     try:
@@ -378,7 +401,7 @@ def restore_backend_from_rollback(
         raise RuntimeError(f'Failed to re-tag rollback image {tag_source}')
 
     compose_base = ['compose', '-p', 'qqchat', '--project-directory', str(app_dir), '-f', str(app_dir / 'docker-compose.yml')]
-    up_res = docker([*compose_base, 'up', '-d', '--no-deps', 'qqchat'], timeout=120)
+    up_res = docker([*compose_base, 'up', '-d', '--no-deps', '--no-build', 'qqchat'], timeout=120)
     if up_res.returncode != 0:
         raise RuntimeError(f'Rollback docker compose up failed: {up_res.stderr}')
 
@@ -421,6 +444,36 @@ def prune_old_rollbacks(app_dir: Path, prefix: str, keep: int, protected: set[st
     )
     for old in dirs[keep:]:
         shutil.rmtree(old, ignore_errors=True)
+
+
+def prune_old_image_tags(keep: int, protected_tags: set[str]) -> list[str]:
+    if keep <= 0:
+        return []
+    res = docker(['images', 'qqchat-agent', '--format', '{{.Repository}}:{{.Tag}}\t{{.ID}}'], timeout=20)
+    if res.returncode != 0:
+        return []
+    buckets: dict[str, set[str]] = {'prev-release-': set(), 'candidate-': set()}
+    for line in res.stdout.splitlines():
+        ref = line.split('\t', 1)[0].strip()
+        if ':' not in ref:
+            continue
+        repo, tag = ref.split(':', 1)
+        if repo != 'qqchat-agent':
+            continue
+        for prefix in buckets:
+            if tag.startswith(prefix):
+                buckets[prefix].add(ref)
+                break
+    pruned: list[str] = []
+    for refs in buckets.values():
+        ordered = sorted(refs, reverse=True)
+        for old_ref in ordered[keep:]:
+            if old_ref in protected_tags:
+                continue
+            rm_res = docker(['rmi', old_ref], timeout=30)
+            if rm_res.returncode == 0:
+                pruned.append(old_ref)
+    return pruned
 
 
 def wait_backend_ready(
@@ -759,6 +812,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         receipt['backend'] = backend_result
         prune_old_rollbacks(app_dir, 'rollback-release-', args.keep_rollbacks, {f'rollback-release-{stamp}'})
+        pruned_tags = prune_old_image_tags(
+            2,
+            {f'qqchat-agent:candidate-{stamp}', f'qqchat-agent:prev-release-{stamp}'},
+        )
+        if isinstance(backend_result, dict):
+            backend_result['prunedImageTags'] = pruned_tags
 
     if napcat_before is not None and container_identity('qqchat-napcat') != napcat_before:
         raise RuntimeError('qqchat-napcat identity changed after deployment')
