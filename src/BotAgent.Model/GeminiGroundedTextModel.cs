@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Ports;
 using BotAgent.Model.Net;
@@ -54,7 +55,10 @@ public sealed class GeminiGroundedTextModel(IModelHttpFetcher http, Func<ModelOp
 
     private static GroundedTextResult Parse(string body)
     {
-        var candidate = JsonNode.Parse(body)?["candidates"]?[0];
+        JsonNode? root;
+        try { root = JsonNode.Parse(body); }
+        catch (JsonException) { return Failure("model_malformed_response"); }
+        var candidate = root?["candidates"]?[0];
         var text = new StringBuilder();
         if (candidate?["content"]?["parts"]?.AsArray() is { } parts)
             foreach (var part in parts)
@@ -79,11 +83,30 @@ public sealed class GeminiGroundedTextModel(IModelHttpFetcher http, Func<ModelOp
         var model = settings.Model?.Trim();
         if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model)
             || string.IsNullOrWhiteSpace(settings.ApiKey)) return null;
+        if (!TryEncodeModelPath(model, out var modelPath)) return null;
         var trimmed = baseUrl.TrimEnd('/');
         if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) trimmed = trimmed[..^3];
-        return Uri.TryCreate($"{trimmed}/v1beta/models/{Uri.EscapeDataString(model)}:generateContent",
+        return Uri.TryCreate($"{trimmed}/v1beta/models/{modelPath}:generateContent",
             UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
             && uri.UserInfo.Length == 0 && uri.Fragment.Length == 0 ? uri : null;
+    }
+
+    private static bool TryEncodeModelPath(string model, out string encoded)
+    {
+        encoded = string.Empty;
+        var segments = model.Split('/');
+        if (segments.Length is 0 or > 4) return false;
+        var escaped = new string[segments.Length];
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var seg = segments[i];
+            if (seg.Length == 0 || seg is "." or ".."
+                || seg.Any(c => char.IsControl(c) || c is '\\' or '?' or '#' or '%'))
+                return false;
+            escaped[i] = Uri.EscapeDataString(seg);
+        }
+        encoded = string.Join('/', escaped);
+        return true;
     }
 
     private static GroundedTextResult Failure(string code, int? status = null) => new(null, [], [], code, status);

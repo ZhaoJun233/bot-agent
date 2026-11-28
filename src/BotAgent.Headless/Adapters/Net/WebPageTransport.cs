@@ -9,6 +9,19 @@ public sealed class WebPageTransport(IHttpFetcher http, Func<bool> allowPrivate)
     private const int DefaultReadLimitBytes = 2 * 1024 * 1024;
     private const int MaxReadLimitBytes = 4 * 1024 * 1024;
 
+    public const string WikimediaBotUserAgent = "BotAgent/1.5 (+https://github.com/ZhaoJun233/bot-agent)";
+
+    public static string? ResolveUserAgent(Uri target, string? requested)
+    {
+        if ((target.Host.EndsWith(".wikipedia.org", StringComparison.OrdinalIgnoreCase)
+             || target.Host.EndsWith(".wikimedia.org", StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(requested) || requested.StartsWith("Mozilla/", StringComparison.OrdinalIgnoreCase)))
+        {
+            return WikimediaBotUserAgent;
+        }
+        return requested;
+    }
+
     public bool TryValidate(string? url, out Uri uri, out string reason)
         => SafeUrl.TryValidate(url, allowPrivate(), out uri, out reason);
 
@@ -20,7 +33,8 @@ public sealed class WebPageTransport(IHttpFetcher http, Func<bool> allowPrivate)
         using var response = await SafeUrl.SendFollowingRedirectsAsync(http, request.Url, target =>
         {
             var message = new HttpRequestMessage(HttpMethod.Get, target);
-            if (request.UserAgent is not null) message.Headers.TryAddWithoutValidation("User-Agent", request.UserAgent);
+            var ua = ResolveUserAgent(target, request.UserAgent);
+            if (ua is not null) message.Headers.TryAddWithoutValidation("User-Agent", ua);
             if (request.AcceptLanguage is not null) message.Headers.TryAddWithoutValidation("Accept-Language", request.AcceptLanguage);
             return message;
         }, allowPrivate(), ct).ConfigureAwait(false);

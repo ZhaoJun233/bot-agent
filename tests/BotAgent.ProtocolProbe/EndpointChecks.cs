@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Model;
+using BotAgent.Domain.Ports;
 using BotAgent.Model;
 using BotAgent.Model.Protocols;
 
@@ -60,5 +62,44 @@ internal static class EndpointChecks
         check(ModelJson.ReadUsage(normalized) == (0, 0), "missing native usage stays numeric zero");
         try { ModelProtocolAdapter.NormalizeResponse(ModelProtocol.OpenAiResponses, """{"status":"failed","output":[]}"""); check(false, "failed Responses status"); }
         catch (ModelFault fault) { check(fault.ErrorCode == "model_upstream_error", "failed Responses status"); }
+
+        Uri? groundedUri = null;
+        var groundedReply = """{"candidates":[{"content":{"parts":[{"text":"synthetic grounded"}]},"groundingMetadata":{"groundingChunks":[{"web":{"title":"Wiki","uri":"https://example.com"}}]}}]}""";
+        var groundedHttp = new FakeHttp((req, _) =>
+        {
+            groundedUri = req.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(groundedReply) });
+        });
+        var single = await new GeminiGroundedTextModel(groundedHttp, () => new ModelOptions
+            { BaseUrl = "https://example.com/v1", ApiKey = "synthetic-key", Model = "example-model" })
+            .GenerateAsync(new GroundedTextRequest("synthetic", 0.2, 128), CancellationToken.None);
+        check(single.ErrorCode is null && single.Text == "synthetic grounded"
+            && groundedUri?.AbsolutePath == "/v1beta/models/example-model:generateContent",
+            "GeminiGroundedTextModel single-segment path preserved");
+
+        var grouped = await new GeminiGroundedTextModel(groundedHttp, () => new ModelOptions
+            { BaseUrl = "https://example.com/v1", ApiKey = "synthetic-key", Model = "group/bot" })
+            .GenerateAsync(new GroundedTextRequest("synthetic", 0.2, 128), CancellationToken.None);
+        check(grouped.ErrorCode is null
+            && groundedUri?.AbsolutePath == "/v1beta/models/group/bot:generateContent"
+            && !groundedUri.AbsoluteUri.Contains("%2F", StringComparison.OrdinalIgnoreCase),
+            "GeminiGroundedTextModel grouped model keeps slash path unescaped");
+
+        var beforeBad = groundedHttp.Calls;
+        foreach (var badModel in new[] { "../evil", "a//b", "bot?x=1" })
+        {
+            var badRoute = await new GeminiGroundedTextModel(groundedHttp, () => new ModelOptions
+                { BaseUrl = "https://example.com/v1", ApiKey = "synthetic-key", Model = badModel })
+                .GenerateAsync(new GroundedTextRequest("synthetic", 0.2, 128), CancellationToken.None);
+            check(badRoute.ErrorCode == "model_route_unavailable" && groundedHttp.Calls == beforeBad,
+                "GeminiGroundedTextModel rejects unsafe model segments fail-closed");
+        }
+
+        var htmlHttp = new FakeHttp((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("<html>502</html>") }));
+        var invalidJson = await new GeminiGroundedTextModel(htmlHttp, () => new ModelOptions
+            { BaseUrl = "https://example.com/v1", ApiKey = "synthetic-key", Model = "example-model" })
+            .GenerateAsync(new GroundedTextRequest("synthetic", 0.2, 128), CancellationToken.None);
+        check(invalidJson.ErrorCode == "model_malformed_response", "GeminiGroundedTextModel returns model_malformed_response on non-JSON body");
     }
 }

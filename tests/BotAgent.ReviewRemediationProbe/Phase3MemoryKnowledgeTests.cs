@@ -692,9 +692,9 @@ internal static class Phase3MemoryKnowledgeTests
         public ToolDefinition[] DescribeTools() =>
         [
             new(new("web.search", ToolCategory.WebRead, "Search", true, "research.actions", "query", ToolDefaultPolicy.FollowSwitch, FeatureKey: ToolFeature.WebSearch, Origin: ToolOrigin.Plugin),
-                [new("query", Required: true, MinLength: 1, MaxLength: 120)]),
+                [new("query", Required: true, MinLength: 2, MaxLength: 120)]),
             new(new("web.read", ToolCategory.WebRead, "Read", true, "research.actions", "url", ToolDefaultPolicy.FollowSwitch, FeatureKey: ToolFeature.WebSearch, Origin: ToolOrigin.Plugin),
-                [new("url", Required: true, MinLength: 1, MaxLength: 500)], HttpUrlField: "url")
+                [new("url", Required: true, MinLength: 8, MaxLength: 500)], HttpUrlField: "url")
         ];
         public async Task<ToolOutcome> ExecuteAsync(string sourceKey, ToolCall call, CancellationToken ct)
         {
@@ -814,22 +814,38 @@ internal static class Phase3MemoryKnowledgeTests
             new(null, null, null, Call: new InlineToolCall("kb.save", new Dictionary<string, string> { ["title"] = "t", ["content"] = "secret-arg" })));
         var unboundRes = await inline.RunAsync(conv, settings, caps,
             new(null, null, null, Call: new InlineToolCall("music.share", new Dictionary<string, string> { ["song"] = "secret-song" })));
+        var webViaSearchAlias = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["search"] = "  alias-search  " })));
+        var webViaQAlias = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["q"] = "alias-q" })));
+        var webReadViaAlias = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.read", new Dictionary<string, string> { ["read"] = "https://example.com/alias" })));
+        var missingWebArg = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["unknown"] = "nope" })));
+        var blankWebArg = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["search"] = "   " })));
+        var shortWebArg = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["search"] = "a" })));
         check(kbRes is not null && kbRes.Contains("插件共存")
             && webRes is not null && webViaCallRes is not null
-            && research.SearchCalls == 2 && researchFacade.TakeNote(groupKey) is null
+            && webViaSearchAlias is not null && webViaQAlias is not null && webReadViaAlias is not null
+            && research.SearchCalls == 5 && researchFacade.TakeNote(groupKey) is null
             && musicRes is not null && fakeMusic.ListenCalls == 1 && fakeMusic.TakeNote(groupKey) is null
-            && blockedActionTool is null && blockedWriteRes is null && unboundRes is null,
-            "P3.1b InlineTurnTools executes kb.search, web.search (direct and via call), and music.listen under SameScopeProfile while blocking action=tool, write tools, and unbound tools");
+            && blockedActionTool is null && blockedWriteRes is null && unboundRes is null
+            && missingWebArg is null && blankWebArg is null && shortWebArg is null,
+            "P3.1b InlineTurnTools executes kb.search, web.search (direct and via call/aliases), web.read alias, and music.listen under SameScopeProfile while blocking action=tool, write tools, unbound tools, and invalid/missing web args");
 
         using (var innerScope = MemoryUseScope.Begin())
         {
             MemoryUseScope.Register(commit => { commit(); return true; });
             var blockedWeb = await inline.RunAsync(conv, settings, caps, new(null, null, null, Search: "应被拦"));
+            var blockedWebAlias = await inline.RunAsync(conv, settings, caps,
+                new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["search"] = "应被拦" })));
             var blockedMusic = await inline.RunAsync(conv, settings, caps, new(null, null, null, Listen: "应被拦"));
             check(!visibility.Allows(settings, null, "music.share")
-                && blockedWeb is null && research.SearchCalls == 2
+                && blockedWeb is null && blockedWebAlias is null && research.SearchCalls == 5
                 && blockedMusic is null && fakeMusic.ListenCalls == 1,
-                "P3.1b elevating to LegacyProfile immediately blocks music.share, web.search, and music.listen");
+                "P3.1b elevating to LegacyProfile immediately blocks music.share, web.search (including call aliases), and music.listen");
         }
 
         var trace = traces.Complete(groupKey, "done");
@@ -837,9 +853,22 @@ internal static class Phase3MemoryKnowledgeTests
             && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "kb.search" && n.ReasonCode == "approval_action_blocked")
             && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "kb.save" && n.ReasonCode == "write_requires_approval")
             && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "music.share" && n.ReasonCode == "tool_unbound")
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "web.search" && n.ReasonCode == "missing_argument")
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "web.search" && n.ReasonCode == "bad_length")
             && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "web.search" && n.ReasonCode == "memory_taint_denied")
             && trace.Nodes.All(n => !string.Equals(n.ReasonCode, "secret-arg", StringComparison.Ordinal) && !string.Equals(n.ReasonCode, "secret-song", StringComparison.Ordinal)),
-            "P3.1b InlineTurnTools records shape-only Gate:denied trace nodes for blocked, write, unbound, and memory-taint rejections");
+            "P3.1b InlineTurnTools records shape-only Gate:denied trace nodes for blocked, write, unbound, invalid-arg, and memory-taint rejections");
+
+        var wikiUa = BotAgent.Adapters.Net.WebPageTransport.ResolveUserAgent(
+            new Uri("https://zh.wikipedia.org/w/api.php?action=query"), "Mozilla/5.0 Chrome/122");
+        var customWikiUa = BotAgent.Adapters.Net.WebPageTransport.ResolveUserAgent(
+            new Uri("https://zh.wikipedia.org/w/api.php?action=query"), "CustomBot/1.0");
+        var normalUa = BotAgent.Adapters.Net.WebPageTransport.ResolveUserAgent(
+            new Uri("https://example.com/page"), "Mozilla/5.0 Chrome/122");
+        check(wikiUa == BotAgent.Adapters.Net.WebPageTransport.WikimediaBotUserAgent
+            && customWikiUa == "CustomBot/1.0"
+            && normalUa == "Mozilla/5.0 Chrome/122",
+            "P3.1c WebPageTransport normalizes browser User-Agent to compliant Bot UA only for Wikimedia hosts");
 
         kbPorts.ClearConversation(groupKey);
         await manager.StopAllAsync(CancellationToken.None);

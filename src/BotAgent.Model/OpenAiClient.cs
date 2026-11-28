@@ -339,6 +339,13 @@ public class OpenAiClient : IModelClient
                     .Select(s => s.TryGetProperty("text", out var t) ? t.GetString() : null)),
                 _ => null
             };
+            if (string.IsNullOrWhiteSpace(rawReply))
+            {
+                Services.FileLog.Write("Agent", "model_content_empty");
+                return new CompletionResult(null, null, rawReply, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
+                    PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops,
+                    CachedPromptTokens: cachedPromptTokens, CacheWriteTokens: cacheWriteTokens);
+            }
 
             // 判定用的开关取**调用方传进来的快照**，不再读实时设置 —— 否则配置热更新会改到在途请求（V3 §5.3）
             var parsed = ModelOutputParser.Parse(rawReply, questionsEnabled: enableAsk);
