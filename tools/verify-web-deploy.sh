@@ -38,6 +38,11 @@ done
 echo "② 经 Caddy 请求"
 if [ -z "$cookie" ]; then echo "  ! 没读到闸门 Cookie，跳过 HTTP 检查"; fail=1
 else
+  root_hdr=$(curl -sI -H "Host: $HOST" -H "Cookie: $cookie" "$BASE/" | tr -d '\r')
+  root_code=$(printf '%s\n' "$root_hdr" | awk 'NR==1{print $2}')
+  root_loc=$(printf '%s\n' "$root_hdr" | awk 'tolower($1)=="location:"{print $2; exit}')
+  if [ "$root_code" = 302 ] && [ "$root_loc" = "/web/" ]; then echo "  ok / ($root_code -> $root_loc)"
+  else echo "  ✗ / ($root_code loc=${root_loc:-none})"; fail=1; fi
   check /web/ 'text/html'
   for r in $refs; do
     case "$r" in

@@ -87,6 +87,8 @@ public sealed class ToolVisibility(
     {
         if (spec.FeatureKey is ToolFeature.Approval or ToolFeature.Question)
             return MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect);
+        if (spec.Id == "music.share" && MemoryUseScope.MaxTier == MemorySensitivityTier.SameScopeProfile)
+            return true;
         var egress = MemoryTaintPolicy.ClassifyTool(spec.Id, spec.ReadOnly, spec.Origin.ToString());
         if (maxAgentSteps <= 1 && egress is ToolEgressClass.SameScopeRead or ToolEgressClass.ExternalReadEgress)
             return false;

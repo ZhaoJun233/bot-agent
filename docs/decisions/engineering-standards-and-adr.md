@@ -120,7 +120,7 @@ flowchart LR
 | **ADR-0002** | 任务与执行状态模型（#114） | 在领域层确立 `AgentTaskState`（9 状态、5 终态不可逆）与纯函数转移表 `AgentTaskTransitions`；`TimedOut` 对 ZBA 投影为 `Failed(errorCode=timeout)` | [0002-agent-task-runtime.md](0002-agent-task-runtime.md) |
 | **ADR-0003** | 任务台账持久化与重启恢复（#116） | 新增 `agent_tasks` 仅记录形状与计数（不存正文），Schema 11→12；重启时通过 `boot_seq` 将在途任务收口为 `Unknown`，**严禁自动重放** | [0003-agent-task-persistence.md](0003-agent-task-persistence.md) |
 | **ADR-0004** | 统一记忆的内置核心与逐事实授权（#153） | 复用事实而非合并聊天历史；记忆由内置核心强制执行“本人、逐事实、逐版本、逐目标会话”授权，停用/撤销/遗忘三态不可混用 | [0004-unified-memory-authorization.md](0004-unified-memory-authorization.md) |
-| **ADR-0005** | 记忆敏感度分级与工具流出面共存矩阵 | 取代粗粒度布尔禁用锁，按 `MemorySensitivityTier`（L0–L3）× `ToolEgressClass`（0–4）执行二维 Fail-Closed 裁决；L2 严禁外网检索，L3 全拒 | [0005-memory-tool-coexistence-taint-tiers.md](0005-memory-tool-coexistence-taint-tiers.md) |
+| **ADR-0005** | 记忆敏感度分级与工具流出面共存矩阵 | 取代粗粒度布尔禁用锁，按 `MemorySensitivityTier`（`None`/`SameScopeProfile`/`StylePreference`/`PersonalFact`/`LegacyProfile`）× `ToolEgressClass`（0–4）执行二维 Fail-Closed 裁决；同源本会话画像按 L1 保守只读放行，L2 严禁外网检索，L3 全拒 | [0005-memory-tool-coexistence-taint-tiers.md](0005-memory-tool-coexistence-taint-tiers.md) |
 | **ADR-0006** | 可选的显式跨平台本人身份关联边界 | 默认关闭；禁止昵称/ID 推测合并；仅限两端可信私聊经 120s 内存 HMAC 挑战绑定 `CanonicalPersonId`；绝不共享聊天记录、RBAC、审批或管理员权 | [0006-optional-cross-platform-identity-linking.md](0006-optional-cross-platform-identity-linking.md) |
 
 ### 新增 ADR 约定

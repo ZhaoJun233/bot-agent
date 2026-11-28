@@ -98,6 +98,7 @@ To block privacy exfiltration across outbound search, external tools, or global 
 | Highest Consumed Tier | `LocalPresentation` (0)<br/>Stickers/TTS/Poke/Segments | `SameScopeRead` (1)<br/>`doc.read`/`chat.digest`/`kb.*`/`reminder.list`/`todo.list` | `ExternalReadEgress` (2)<br/>`web.*`/`music.*`/Read-Only MCP/Unclassified | `ExternalSideEffect` (3)<br/>`ServerAgent`/Approval Writes/Workers | `GlobalStateWrite` (4)<br/>`_mood`/Room Vibes/`_research`/Agent History |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `None` (0) | Allowed | Allowed | Allowed | Standard Gate | Allowed |
+| `SameScopeProfile` (1) | Allowed (destination + lock) | Allowed | Allowed (no cross-turn cache; same-target music share) | **Denied** | **Denied** |
 | `StylePreference` (L1) | Allowed (destination + lock) | Allowed | Allowed (no `_research` cache write) | **Denied** | **Denied** |
 | `PersonalFact` (L2) | Allowed (pinned target only) | Allowed | **Strictly Denied** (exfil protection) | **Denied** | **Denied** |
 | `LegacyProfile` (L3) | **Denied** | **Denied** | **Denied** | **Denied** | **Denied** |

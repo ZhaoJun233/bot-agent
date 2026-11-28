@@ -98,9 +98,10 @@ flowchart TD
 | 最高敏感度等级 | `LocalPresentation` (0)<br/>表情包/语音/戳一戳/分句 | `SameScopeRead` (1)<br/>`doc.read`/`chat.digest`/`kb.*`/`reminder.list`/`todo.list` | `ExternalReadEgress` (2)<br/>`web.*`/`music.*`/只读 MCP/未分类 | `ExternalSideEffect` (3)<br/>`ServerAgent`/审批写入/Worker | `GlobalStateWrite` (4)<br/>`_mood`/全局氛围/`_research`/Agent历史 |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `None` (0) 未消费记忆 | 允许 | 允许 | 允许 | 按常规权限 | 允许 |
+| `SameScopeProfile` (1 同源本会话画像) | 允许（同目标 + 撤销锁） | 允许 | 允许（禁写跨轮缓存；同目标点歌除外） | **拒绝** | **拒绝** |
 | `StylePreference` (L1 表达偏好) | 允许（含目的地+撤销锁校验） | 允许 | 允许（禁写研究缓存） | **拒绝** | **拒绝** |
 | `PersonalFact` (L2 个人事实) | 允许（仅当前限定目标） | 允许 | **严格拒绝**（防提示词注入外泄） | **拒绝** | **拒绝** |
-| `LegacyProfile` (L3 旧画像自由文本) | **拒绝** | **拒绝** | **拒绝** | **拒绝** | **拒绝** |
+| `LegacyProfile` (L3 未知来源/旧凭据) | **拒绝** | **拒绝** | **拒绝** | **拒绝** | **拒绝** |
 
 - **撤销即时生效**：所有外部渲染与记忆写入前必须再过 `MemoryUseScope.CanUse` / `TryUse` / `TryDeliver` 目的地绑定锁校验。
 - **社区记忆分片预算**：`ScopedCommunityMemoryService` 读取跨轮片段严格截断（单条 `1200` 字符、`MaxContributorChars = 2400`）。

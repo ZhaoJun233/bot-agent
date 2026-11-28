@@ -219,7 +219,7 @@ public sealed partial class ReplyPipeline
             box, hooks, _replyTools, research, music, stickers, vibes, approvals, participation, _platformPolicies,
             _delivery, riskBackoff, AllowsFeature, QueueBackground, RequestAcceptedTaskReply, _toolNotes);
         _turnLoop = new AgentTurnLoop(brain, traces, _replyTools);
-        _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins, _platformPolicies, hooks.IsDisposed);
+        _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins, _platformPolicies, hooks.IsDisposed, music, traces);
 
         _replyGate = new ResizableReplyGate(
             Math.Clamp(box.Current.MaxConcurrentReplies, 1, 16));

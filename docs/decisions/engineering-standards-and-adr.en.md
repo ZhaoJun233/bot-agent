@@ -120,7 +120,7 @@ flowchart LR
 | **0002** | Unified Agent Task Runtime | Centralizes all `//` & background tasks into an explicit 9-state machine; ZBA/Panel act as channel adapters only | [ADR-0002](0002-agent-task-runtime.md) |
 | **0003** | Agent Task Persistence Boundaries | Persists only structural metrics and `boot_seq` in `agent_tasks`; restarts mark interrupted tasks `Unknown` instead of auto-replaying | [ADR-0003](0003-agent-task-persistence.md) |
 | **0004** | Unified Memory Authorization | Replaces uncontrolled legacy profiles with revocable, destination-bound per-fact authorization verified at execution time | [ADR-0004](0004-unified-memory-authorization.md) |
-| **0005** | Memory Sensitivity × Tool Egress Matrix | Coexists tiered memory and tools via fail-closed `MemorySensitivityTier` × `ToolEgressClass` gating (L2 denies external read egress) | [ADR-0005](0005-memory-tool-coexistence-taint-tiers.md) |
+| **0005** | Memory Sensitivity × Tool Egress Matrix | Coexists tiered memory and tools via fail-closed `MemorySensitivityTier` (`None`/`SameScopeProfile`/`StylePreference`/`PersonalFact`/`LegacyProfile`) × `ToolEgressClass` gating (same-scope profiles allow conservative read-only tools, L2 denies external read egress, L3 denies all) | [ADR-0005](0005-memory-tool-coexistence-taint-tiers.md) |
 | **0006** | Optional Cross-Platform Identity Linking | Disabled by default; DM-only 120s HMAC mutual verification; strictly bans group KB, chat history, or RBAC privilege sharing | [ADR-0006](0006-optional-cross-platform-identity-linking.md) |
 
 ### Adding a New ADR

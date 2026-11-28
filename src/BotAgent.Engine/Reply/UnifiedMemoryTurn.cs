@@ -77,7 +77,7 @@ public sealed class UnifiedMemoryTurn : IDisposable
         // profile must not disable ordinary tools, natural Agent dispatch, or delivery.
         var summary = read(key);
         if (string.IsNullOrWhiteSpace(summary)) return string.Empty;
-        Register(receipt, MemorySensitivityTier.LegacyProfile);
+        Register(receipt, MemorySensitivityTier.SameScopeProfile);
         return summary;
     }
 

@@ -1095,7 +1095,8 @@ public static partial class Program
             Check("档案不再重复注入上下文里已有的消息",
                 !sysB.Contains("B群第11句闲聊"), Truncate(sysB, 400));
             foreach (var request in new[] { lastA, lastB })
-                Check("消费本群档案的回合没有外部工具", !SystemText(request).Contains("[可用工具]")
+                Check("消费本群同源档案的回合仍隐藏需审批写工具（且不带 OpenAI tools）",
+                    !SystemText(request).Contains("tool.request") && !SystemText(request).Contains("kb.save")
                     && request["tools"] is not JsonArray { Count: > 0 });
         }
 
@@ -1160,7 +1161,8 @@ public static partial class Program
         var first = openAi.Requests.LastOrDefault(x => UserTexts(x).Any(t => t.Contains("机器人请看第一轮")));
         Check("普通回答确实消费同源更早的原文", first is not null && SystemText(first).Contains("第一轮画像原始发言0"));
         Check("首轮系统提示仍在独立长度预算内", first is not null && SystemText(first).Length < 4200, $"system 长度={SystemText(first ?? new JsonObject()).Length}");
-        Check("消费画像的回答只允许直接文本", first is not null && !SystemText(first).Contains("[可用工具]")
+        Check("消费同源画像的回答仍禁止未授权写工具", first is not null
+            && !SystemText(first).Contains("tool.request") && !SystemText(first).Contains("kb.save")
             && first["tools"] is not JsonArray { Count: > 0 });
 
         for (var i = 0; i < 12; i++)
@@ -1176,8 +1178,9 @@ public static partial class Program
         var last = openAi.Requests.LastOrDefault(x => UserTexts(x).Any(t => t.Contains("机器人请看第二轮")));
         Check("追加原文后系统提示仍在独立长度预算内", last is not null && SystemText(last).Length < 4200,
             $"system 长度={SystemText(last ?? new JsonObject()).Length}");
-        Check("第二轮仍消费来源内原文且不暴露外部工具", last is not null && SystemText(last).Contains("第二轮画像新发言0")
-            && !SystemText(last).Contains("[可用工具]") && last["tools"] is not JsonArray { Count: > 0 });
+        Check("第二轮仍消费来源内原文且隐藏写工具", last is not null && SystemText(last).Contains("第二轮画像新发言0")
+            && !SystemText(last).Contains("tool.request") && !SystemText(last).Contains("kb.save")
+            && last["tools"] is not JsonArray { Count: > 0 });
         Check("两轮普通文本回复均正常发送", protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).Contains("正常回复")) == 2);
         CheckNoAutomaticProfileSummary(dataDir, openAi);
         await bot.StopAsync();
@@ -1942,9 +1945,9 @@ public static partial class Program
     {
         Section("S17 面板内扫码登录（NapCat WebUI 代理 + 二维码渲染）");
 
-        const int openAiPort = 17817;
-        const int panelPort = 18091;
-        const int napcatPort = 18101;
+        var openAiPort = FreePort(17817);
+        var panelPort = FreePort(18091);
+        var napcatPort = FreePort(18101);
         const string panelToken = "it-panel-token";
         const string initialQr = "https://txz.qq.com/p?k=INITIAL-KEY&f=1600001615";
         const string legacyPassword = "synthetic-pass-123";
@@ -1973,6 +1976,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_PROTOCOL"] = "ForwardWebSocket",
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13027", // 没人监听：本场景不关心消息通道
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
+            ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
             ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_AGENT_TOKEN"] = "it-bridge-token",
             ["QQCHAT_NAPCAT_WEBUI_URL"] = napcat.BaseUrl,
@@ -2085,7 +2089,7 @@ public static partial class Program
         await bot.StopAsync();
 
         // ---- 5) 没配令牌时：给提示，别 500 ----
-        const int panelPort2 = 18092;
+        var panelPort2 = FreePort(18092);
         using var bot2 = StartBot(new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = NewDataDir("s17b"),
@@ -2094,6 +2098,7 @@ public static partial class Program
             ["QQCHAT_MODEL"] = "mock-model",
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13028",
             ["QQCHAT_HEALTH_PORT"] = panelPort2.ToString(),
+            ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
             ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_NAPCAT_WEBUI_TOKEN"] = string.Empty // 部署时最容易忘的一项
         });
