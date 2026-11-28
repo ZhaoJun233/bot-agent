@@ -546,6 +546,7 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
   const pageB = await contextB.newPage()
+  let primaryError: unknown = null
   try {
     await openConfiguration(pageA)
     await openConfiguration(pageB)
@@ -570,9 +571,18 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
     const restored = await readConfiguration(request)
     expect(restored.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
+  } catch (err) {
+    primaryError = err
+    throw err
   } finally {
-    await contextA.close().catch(() => {})
-    await contextB.close().catch(() => {})
+    let closeError: unknown = null
+    for (const ctx of [contextA, contextB]) {
+      try {
+        await ctx.close()
+      } catch (err) {
+        if (!primaryError && !closeError) closeError = err
+      }
+    }
     // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
     const latest = await readConfiguration(request)
     if (Number(latest.view.behavior.groupInterjectionCooldownSeconds?.value) !== original) {
@@ -580,6 +590,7 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
         behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original } }
       })
     }
+    if (!primaryError && closeError) throw closeError
   }
 })
 

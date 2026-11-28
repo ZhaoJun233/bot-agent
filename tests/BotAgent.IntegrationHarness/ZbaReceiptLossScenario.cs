@@ -10,12 +10,23 @@ public static partial class Program
         const string admin = "synthetic-zba-restart-admin";
         const string key = "synthetic-receipt-loss-key";
         var data = NewDataDir("s55-receipt-loss");
-        var panel1 = FreePort(18210);
-        var ws1 = FreePort(13160);
-        var panel2 = FreePort(18211);
-        var ws2 = FreePort(13161);
-        var panel3 = FreePort(18212);
-        var ws3 = FreePort(13162);
+        var usedPorts = new HashSet<int>();
+        int NextDistinctPort(int preferred)
+        {
+            for (var offset = 0; offset < 200; offset++)
+            {
+                var candidate = FreePort(preferred + offset);
+                if (usedPorts.Add(candidate)) return candidate;
+            }
+            throw new InvalidOperationException("No distinct port available for ZbaReceiptLossScenario");
+        }
+
+        var panel1 = NextDistinctPort(18210);
+        var ws1 = NextDistinctPort(13160);
+        var panel2 = NextDistinctPort(18211);
+        var ws2 = NextDistinctPort(13161);
+        var panel3 = NextDistinctPort(18212);
+        var ws3 = NextDistinctPort(13162);
         var root1 = $"http://127.0.0.1:{panel1}/zba/v1";
         var root2 = $"http://127.0.0.1:{panel2}/zba/v1";
         var root3 = $"http://127.0.0.1:{panel3}/zba/v1";

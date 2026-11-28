@@ -15,18 +15,21 @@ public static partial class Program
         for (var attempt = 0; attempt < 200; attempt++)
         {
             ct.ThrowIfCancellationRequested();
-            if (bot.HasExited) throw new InvalidOperationException($"business_process_exited:{bot.ExitCode}");
+            if (bot.HasExited)
+                throw new InvalidOperationException($"business_process_exited:{bot.ExitCode}\n{bot.Diagnostics()}");
             try
             {
                 using var response = await http.GetAsync($"http://127.0.0.1:{panelPort}/zba/v1/health", ct);
                 var body = await response.Content.ReadAsStringAsync(ct);
-                lastState = $"status={(int)response.StatusCode} body={body}";
+                lastState = $"status={(int)response.StatusCode} body={Clip(body, 200)}";
                 if (response.StatusCode == HttpStatusCode.OK
                     && JsonNode.Parse(body)?["ready"]?.GetValue<bool>() == true)
                     return;
             }
-            catch (HttpRequestException ex) { lastState = ex.GetType().Name; }
-            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested) { lastState = ex.GetType().Name; }
+            catch (HttpRequestException ex) { lastState = $"{ex.GetType().Name}: {Clip(ex.Message, 160)}"; }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested) { lastState = $"{ex.GetType().Name}: {Clip(ex.Message, 160)}"; }
+            catch (System.Text.Json.JsonException ex) { lastState = $"{ex.GetType().Name}: {Clip(ex.Message, 160)}"; }
+            catch (InvalidOperationException ex) { lastState = $"{ex.GetType().Name}: {Clip(ex.Message, 160)}"; }
             await Task.Delay(150, ct);
         }
         throw new TimeoutException($"business_readiness_timeout (last={lastState})\n{bot.Diagnostics()}");

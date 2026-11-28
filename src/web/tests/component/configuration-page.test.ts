@@ -8,6 +8,7 @@ import {
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
 import { getPendingOperation } from '../../src/shared/sync/pending-operations'
 import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
+import { acquireScheduler } from '../../src/shared/sync/event-scheduler'
 
 const mounted: Array<{ unmount: () => void }> = []
 const disposers: Array<() => void> = []
@@ -1628,5 +1629,132 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     expect(local.find('[data-testid="config-field-localChannelIds"]').exists()).toBe(true)
     expect(local.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(false)
     expect(local.find('[data-testid="config-secrets"]').exists()).toBe(false)
+  })
+
+  it('后台事件触发刷新期间不锁死输入，允许继续编辑草稿', async () => {
+    let calls = 0
+    let resolveBg!: (value: ZbaConfigurationReadResult) => void
+    const bgPromise = new Promise<ZbaConfigurationReadResult>(resolve => { resolveBg = resolve })
+    const initial = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    const updated = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    updated.version = '2'
+
+    const client = clientWith(initial, {
+      readConfiguration: async () => (++calls === 1 ? initial : bgPromise)
+    })
+    ;(client as unknown as { listEvents: (after: number) => Promise<unknown> }).listEvents = async (after: number) => ({
+      items: [{ sequence: after + 1, type: 'configuration.saved', at: '2026-11-28T00:00:00Z' }],
+      nextSequence: after + 1,
+      resyncRequired: false,
+      generatedAt: '2026-11-28T00:00:00Z'
+    })
+
+    const { scheduler, release } = acquireScheduler(client)
+    disposers.push(release)
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+
+    const polling = scheduler.pollOnce()
+    await flushPromises()
+
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
+    expect(input.attributes('disabled')).toBeUndefined()
+    await input.setValue('后台刷新中编辑的草稿')
+    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
+
+    resolveBg(updated)
+    await expect(polling).resolves.toBe(true)
+    await flushPromises()
+    expect((input.element as HTMLTextAreaElement).value).toBe('后台刷新中编辑的草稿')
+  })
+
+  it('交互式重新读取被并发后台刷新抢号后若双双失败，仍展示读取错误', async () => {
+    let calls = 0
+    let rejectInteractive!: (err: unknown) => void
+    let rejectBg!: (err: unknown) => void
+    const interactivePromise = new Promise<ZbaConfigurationReadResult>((_, reject) => { rejectInteractive = reject })
+    const bgPromise = new Promise<ZbaConfigurationReadResult>((_, reject) => { rejectBg = reject })
+    const initial = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+
+    const client = clientWith(initial, {
+      readConfiguration: async () => {
+        calls += 1
+        if (calls === 1) return initial
+        if (calls === 2) return interactivePromise
+        return bgPromise
+      }
+    })
+    ;(client as unknown as { listEvents: (after: number) => Promise<unknown> }).listEvents = async (after: number) => ({
+      items: [{ sequence: after + 1, type: 'configuration.saved', at: '2026-11-28T00:00:00Z' }],
+      nextSequence: after + 1,
+      resyncRequired: false,
+      generatedAt: '2026-11-28T00:00:00Z'
+    })
+
+    const { scheduler, release } = acquireScheduler(client)
+    disposers.push(release)
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="config-reload"]').trigger('click')
+    const polling = scheduler.pollOnce()
+    await flushPromises()
+
+    rejectInteractive(new ZbaRequestError(503, 'http_error', 'interactive 503'))
+    await flushPromises()
+    rejectBg(new ZbaRequestError(502, 'http_error', 'background 502'))
+    await expect(polling).resolves.toBe(false)
+    await flushPromises()
+
+    const notice = wrapper.find('[data-testid="error-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('http_error')
+    expect(notice.text()).toContain('HTTP 502')
+    expect(wrapper.get('[data-testid="config-reload"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('进行中的后台刷新被交互式重新读取覆盖且后者成功时，调度器不误标 stale', async () => {
+    let calls = 0
+    let resolveBg!: (value: ZbaConfigurationReadResult) => void
+    const bgPromise = new Promise<ZbaConfigurationReadResult>(resolve => { resolveBg = resolve })
+    const initial = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    const updated = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    updated.version = '2'
+
+    const client = clientWith(initial, {
+      readConfiguration: async () => {
+        calls += 1
+        if (calls === 1) return initial
+        if (calls === 2) return bgPromise
+        return updated
+      }
+    })
+    ;(client as unknown as { listEvents: (after: number) => Promise<unknown> }).listEvents = async (after: number) => ({
+      items: [{ sequence: after + 1, type: 'configuration.saved', at: '2026-11-28T00:00:00Z' }],
+      nextSequence: after + 1,
+      resyncRequired: false,
+      generatedAt: '2026-11-28T00:00:00Z'
+    })
+
+    const { scheduler, release } = acquireScheduler(client)
+    disposers.push(release)
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+
+    const polling = scheduler.pollOnce()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="config-reload"]').trigger('click')
+    await flushPromises()
+
+    resolveBg(initial)
+    await expect(polling).resolves.toBe(true)
+    await flushPromises()
+
+    expect(scheduler.snapshot().state).toBe('live')
+    expect(scheduler.snapshot().failedResource).toBeNull()
+    expect(scheduler.snapshot().failures).toBe(0)
+    expect(wrapper.find('[data-testid="config-reload"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('版本 2')
   })
 })
