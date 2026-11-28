@@ -602,10 +602,7 @@ def deploy_backend_stage(
         docker(['tag', candidate_image, 'qqchat-agent:latest'], timeout=20)
         adopted = True
         compose_base = ['compose', '-p', 'qqchat', '--project-directory', str(app_dir), '-f', str(app_dir / 'docker-compose.yml')]
-        c_build = docker([*compose_base, 'build', 'qqchat'], timeout=300)
-        if c_build.returncode != 0:
-            raise RuntimeError('docker compose build qqchat failed')
-        c_up = docker([*compose_base, 'up', '-d', '--no-deps', 'qqchat'], timeout=120)
+        c_up = docker([*compose_base, 'up', '-d', '--no-deps', '--no-build', 'qqchat'], timeout=120)
         if c_up.returncode != 0:
             raise RuntimeError('docker compose up qqchat failed')
 
@@ -617,12 +614,16 @@ def deploy_backend_stage(
                     raise RuntimeError(f'Failed to re-attach network {net}')
 
         ready_info = wait_backend_ready(napcat_before, health_url, expected_version, timeout_sec, allow_unready)
+        running_image = container_image_id('qqchat-bot')
+        if running_image != candidate_image:
+            raise RuntimeError(f'Running image mismatch: expected {candidate_image}, got {running_image}')
         err_count = count_new_log_errors(log_path, log_offset)
         return {
             'status': 'ok',
             'rollbackDir': str(rollback_dir),
             'previousImage': current_image,
             'candidateImage': candidate_image,
+            'runningImage': running_image,
             'sqliteUserVersion': user_version,
             'pluginManifestsBackedUp': plugin_manifests,
             'extraNetworksReattached': extra_networks,

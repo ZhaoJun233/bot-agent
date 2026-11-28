@@ -778,10 +778,12 @@ internal static class Phase3MemoryKnowledgeTests
         var fakeMusic = new FakeMusicUseCase();
         var settings = new AppSettings { EnableWebSearch = true, EnableMusic = true, MaxAgentSteps = 2, WebSearchCooldownSeconds = 0, MusicListenCooldownSeconds = 0 };
         var box = new SettingsBox(settings);
+        var traces = new TurnTraceStore();
+        traces.Begin(groupKey);
         var approvals = new ApprovalUseCase(box, new ApprovalHooks(_ => { }, (t, _) => t, (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
-            new SessionPolicyLedger(), new TurnTraceStore(), catalog: manager.GetToolCatalog);
+            new SessionPolicyLedger(), traces, catalog: manager.GetToolCatalog);
         var visibility = new ToolVisibility(gate, webReady: () => researchFacade.IsReady, catalog: () => approvals.Capabilities.Catalog);
-        var inline = new InlineTurnTools(researchFacade, approvals, new ParticipationUseCase(box, _ => { }), _ => { }, gate, music: fakeMusic);
+        var inline = new InlineTurnTools(researchFacade, approvals, new ParticipationUseCase(box, _ => { }), _ => { }, gate, music: fakeMusic, traces: traces);
 
         var reference = new MessageRef(fixture.GroupCtx.Conversation, "m-p3-samescope");
         var envelope = new PlatformInboundEnvelope(new(fixture.GroupCtx.Driver, reference),
@@ -802,11 +804,22 @@ internal static class Phase3MemoryKnowledgeTests
         var kbRes = await inline.RunAsync(conv, settings, caps,
             new(null, null, null, Call: new InlineToolCall("kb.search", new Dictionary<string, string> { ["query"] = "共存" })));
         var webRes = await inline.RunAsync(conv, settings, caps, new(null, null, null, Search: "测试查询"));
+        var webViaCallRes = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("web.search", new Dictionary<string, string> { ["query"] = "via-call" })));
         var musicRes = await inline.RunAsync(conv, settings, caps, new(null, null, null, Listen: "起风了"));
+        var blockedActionTool = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Action: BotAgent.Domain.Reply.ReplyAction.Tool,
+                Call: new InlineToolCall("kb.search", new Dictionary<string, string> { ["query"] = "共存" })));
+        var blockedWriteRes = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("kb.save", new Dictionary<string, string> { ["title"] = "t", ["content"] = "secret-arg" })));
+        var unboundRes = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("music.share", new Dictionary<string, string> { ["song"] = "secret-song" })));
         check(kbRes is not null && kbRes.Contains("插件共存")
-            && webRes is not null && research.SearchCalls == 1 && researchFacade.TakeNote(groupKey) is null
-            && musicRes is not null && fakeMusic.ListenCalls == 1 && fakeMusic.TakeNote(groupKey) is null,
-            "P3.1b InlineTurnTools executes kb.search, web.search, and music.listen under SameScopeProfile without leaving cross-turn notes");
+            && webRes is not null && webViaCallRes is not null
+            && research.SearchCalls == 2 && researchFacade.TakeNote(groupKey) is null
+            && musicRes is not null && fakeMusic.ListenCalls == 1 && fakeMusic.TakeNote(groupKey) is null
+            && blockedActionTool is null && blockedWriteRes is null && unboundRes is null,
+            "P3.1b InlineTurnTools executes kb.search, web.search (direct and via call), and music.listen under SameScopeProfile while blocking action=tool, write tools, and unbound tools");
 
         using (var innerScope = MemoryUseScope.Begin())
         {
@@ -814,10 +827,19 @@ internal static class Phase3MemoryKnowledgeTests
             var blockedWeb = await inline.RunAsync(conv, settings, caps, new(null, null, null, Search: "应被拦"));
             var blockedMusic = await inline.RunAsync(conv, settings, caps, new(null, null, null, Listen: "应被拦"));
             check(!visibility.Allows(settings, null, "music.share")
-                && blockedWeb is null && research.SearchCalls == 1
+                && blockedWeb is null && research.SearchCalls == 2
                 && blockedMusic is null && fakeMusic.ListenCalls == 1,
                 "P3.1b elevating to LegacyProfile immediately blocks music.share, web.search, and music.listen");
         }
+
+        var trace = traces.Complete(groupKey, "done");
+        check(trace is not null
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "kb.search" && n.ReasonCode == "approval_action_blocked")
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "kb.save" && n.ReasonCode == "write_requires_approval")
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "music.share" && n.ReasonCode == "tool_unbound")
+            && trace.Nodes.Any(n => n.Kind == BotAgent.Domain.Ops.TurnNodeKind.Gate && n.Status == "denied" && n.ToolId == "web.search" && n.ReasonCode == "memory_taint_denied")
+            && trace.Nodes.All(n => !string.Equals(n.ReasonCode, "secret-arg", StringComparison.Ordinal) && !string.Equals(n.ReasonCode, "secret-song", StringComparison.Ordinal)),
+            "P3.1b InlineTurnTools records shape-only Gate:denied trace nodes for blocked, write, unbound, and memory-taint rejections");
 
         kbPorts.ClearConversation(groupKey);
         await manager.StopAllAsync(CancellationToken.None);

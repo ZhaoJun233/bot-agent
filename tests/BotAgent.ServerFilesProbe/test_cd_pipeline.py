@@ -106,6 +106,7 @@ if args and args[0] == 'run':
     sys.exit(0)
 
 if args and args[0] == 'compose':
+    state.setdefault('compose_calls', []).append(args)
     if 'up' in args:
         state['bot_image'] = state['images'].get('qqchat-agent:latest', state['bot_image'])
         # Simulate compose dropping external network unless reattached.
@@ -120,7 +121,7 @@ if args and args[0] == 'compose':
         else:
             state['active_mode'] = 'rollback'
             state['bot_health'] = 'running healthy'
-        save()
+    save()
     sys.exit(0)
 
 if args[:2] == ['network', 'connect']:
@@ -420,7 +421,13 @@ class CdPipelineTests(unittest.TestCase):
         try:
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertNotIn('secret-panel.example.test', proc.stdout)
-            self.assertNotIn('secret-panel.example.test', (tmp / 'receipt.json').read_text(encoding='utf-8'))
+            receipt_text = (tmp / 'receipt.json').read_text(encoding='utf-8')
+            self.assertNotIn('secret-panel.example.test', receipt_text)
+            receipt_data = json.loads(receipt_text)
+            self.assertEqual(receipt_data['backend']['runningImage'], receipt_data['backend']['candidateImage'])
+            compose_calls = final_state.get('compose_calls', [])
+            self.assertFalse(any('build' in c for c in compose_calls), f'unexpected compose build: {compose_calls}')
+            self.assertTrue(any('up' in c and '--no-build' in c for c in compose_calls), f'missing --no-build: {compose_calls}')
             self.assertIn('qqchat6-net', final_state['bot_networks'])
             self.assertIn('/web/assets/app-1234.js', (web_dir / 'index.html').read_text(encoding='utf-8'))
             rb_dirs = list(app_dir.glob('rollback-release-*'))

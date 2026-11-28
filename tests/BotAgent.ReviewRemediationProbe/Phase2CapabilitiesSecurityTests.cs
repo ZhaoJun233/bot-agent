@@ -410,6 +410,22 @@ internal static class Phase2CapabilitiesSecurityTests
         var evilToolId = ModelOutputParser.Parse("""{"suitability": 92, "reply": "hi", "call": {"tool": "../bash;rm", "args": {}}}""", false).Result;
         check(evilToolId.Call is null,
             "inline call parser: rejects non-allowlisted tool id characters");
+
+        var toolActionOutput = ModelOutputParser.Parse("""{"suitability": 95, "action": "tool", "tool": "kb.save", "args": {"content": "x"}, "sticker": "abcd"}""", false);
+        check(toolActionOutput.Result.Action == BotAgent.Domain.Reply.ReplyAction.Tool
+            && toolActionOutput.Result.Reply is null
+            && toolActionOutput.Result.StickerId is null
+            && toolActionOutput.Result.Call is { ToolId: "kb.save" } tc
+            && tc.Arguments["content"] == "x",
+            "inline call parser: preserves Call on action=tool while clearing Send and other side effects");
+
+        var toolOnlyNotices = ModelOutputParser.Parse("""{"suitability": 95, "reply": "", "call": {"tool": "doc.read", "args": {"source": "latest"}}}""", false).Notices;
+        check(toolOnlyNotices.All(n => n.ReasonCode != "empty_reply"),
+            "inline call parser: suppresses empty_reply notice when explicit tool call is present");
+
+        var pureEmptyNotices = ModelOutputParser.Parse("""{"suitability": 95, "reply": ""}""", false).Notices;
+        check(pureEmptyNotices.Any(n => n.ReasonCode == "empty_reply"),
+            "inline call parser: retains empty_reply notice when reply is empty without tool or media");
         return Task.CompletedTask;
     }
 

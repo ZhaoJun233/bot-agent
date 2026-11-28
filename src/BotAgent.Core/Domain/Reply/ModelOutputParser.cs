@@ -145,7 +145,15 @@ public static class ModelOutputParser
                 notices.Add(new ParseNotice(ParseNoticeKind.SilentMarkerInBody));
             }
 
-            if (verdict.Malformed)
+            var hasDeclaredToolOrMedia = declared.Call is not null
+                || !string.IsNullOrWhiteSpace(declared.Search)
+                || !string.IsNullOrWhiteSpace(declared.Read)
+                || !string.IsNullOrWhiteSpace(declared.Listen)
+                || !string.IsNullOrWhiteSpace(declared.ShareSong)
+                || !string.IsNullOrWhiteSpace(declared.Speak)
+                || !string.IsNullOrWhiteSpace(declared.StickerId)
+                || declared.PokeTargetId.HasValue;
+            if (verdict.Malformed && !(verdict.ReasonCode == "empty_reply" && hasDeclaredToolOrMedia))
             {
                 // 只记结构化字段（原因码 + 长度）：正文可能转述群聊内容，不能进日志/面板
                 notices.Add(new ParseNotice(ParseNoticeKind.VerdictRejected, ModelOutputText.VisibleLength(rawReply), ReasonCode: verdict.ReasonCode));
@@ -155,6 +163,7 @@ public static class ModelOutputParser
             // 时才带出去（V3 §8.1：silent = 不发送任何 QQ 消息、不留隐藏副作用）。
             //   • 旧协议（压根没有 action 字段）：保持改造前行为 —— 空 reply + speak 仍是“只发语音”；
             //   • action=reply：同上（模型可以用 speak / sticker 表达“这句用声音说 / 用图说”）；
+            //   • action=tool：只保留 Call 供审批冻参，其余副作用与 Send=false 仍全清空；
             //   • 显式写了非 reply 的动作（silent / ask / tool / 未知 / 超长 / 非字符串）：一律作废，
             //     免得“说了不说”却还发语音、分享歌曲或悄悄出网。
             var keepSideEffects = string.IsNullOrWhiteSpace(declared.Action)
@@ -189,7 +198,7 @@ public static class ModelOutputParser
                     Intent: declared.Intent,
                     AgentTask: verdict.AgentTask,
                     AgentAck: verdict.AgentAck,
-                    Call: keepSideEffects ? declared.Call : null),
+                    Call: (keepSideEffects || verdict.Action == ReplyAction.Tool) ? declared.Call : null),
                 notices);
         }
         catch (JsonException)
