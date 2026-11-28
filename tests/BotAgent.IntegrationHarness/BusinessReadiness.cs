@@ -11,6 +11,7 @@ public static partial class Program
     {
         await WaitForPortAsync(panelPort, ct, bot);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        var lastState = "no_response";
         for (var attempt = 0; attempt < 200; attempt++)
         {
             ct.ThrowIfCancellationRequested();
@@ -18,14 +19,16 @@ public static partial class Program
             try
             {
                 using var response = await http.GetAsync($"http://127.0.0.1:{panelPort}/zba/v1/health", ct);
+                var body = await response.Content.ReadAsStringAsync(ct);
+                lastState = $"status={(int)response.StatusCode} body={body}";
                 if (response.StatusCode == HttpStatusCode.OK
-                    && JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))?["ready"]?.GetValue<bool>() == true)
+                    && JsonNode.Parse(body)?["ready"]?.GetValue<bool>() == true)
                     return;
             }
-            catch (HttpRequestException) { }
-            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { }
+            catch (HttpRequestException ex) { lastState = ex.GetType().Name; }
+            catch (TaskCanceledException ex) when (!ct.IsCancellationRequested) { lastState = ex.GetType().Name; }
             await Task.Delay(150, ct);
         }
-        throw new TimeoutException("business_readiness_timeout");
+        throw new TimeoutException($"business_readiness_timeout (last={lastState})\n{bot.Diagnostics()}");
     }
 }

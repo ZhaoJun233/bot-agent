@@ -686,8 +686,11 @@ function reportAuthFailure(cause: unknown): boolean {
  */
 async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'): Promise<boolean> {
   const sequence = ++loadSequence
-  loading.value = true
-  error.value = null
+  const interactive = mode === 'interactive'
+  if (interactive) {
+    loading.value = true
+    error.value = null
+  }
   try {
     const next = await props.client.readConfiguration(1)
     if (sequence !== loadSequence) return false
@@ -708,13 +711,14 @@ async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'
       }
     }
     snapshot.value = next
+    error.value = null
     loadedAt.value = formatTime(new Date().toISOString())
     return true
   } catch (cause) {
     if (sequence !== loadSequence) return false
     // 认证失效也是"没读到"：不能签已追平。
     if (reportAuthFailure(cause)) return false
-    error.value = toUiError(cause)
+    if (interactive) error.value = toUiError(cause)
     return false
   } finally {
     if (sequence === loadSequence) loading.value = false

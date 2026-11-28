@@ -564,14 +564,15 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await expect(pageB.getByTestId('config-save-bar')).toContainText('1 项修改')
     await expect(inputB).toHaveValue(String(original + 2))
 
+    await expect(inputA).toHaveValue(String(original + 1), { timeout: 15_000 })
     await inputA.fill(String(original))
     await pageA.getByTestId('config-save').click()
     await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
     const restored = await readConfiguration(request)
     expect(restored.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
   } finally {
-    await contextA.close()
-    await contextB.close()
+    await contextA.close().catch(() => {})
+    await contextB.close().catch(() => {})
     // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
     const latest = await readConfiguration(request)
     if (Number(latest.view.behavior.groupInterjectionCooldownSeconds?.value) !== original) {
